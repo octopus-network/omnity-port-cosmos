@@ -32,6 +32,7 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
+cosmos-sdk-proto = "0.22.0"
 cosmwasm-schema = "2.0.1"
 cosmwasm-std = { version = "2.0.1", features = [
   "cosmwasm_1_3",
@@ -40,6 +41,7 @@ cosmwasm-std = { version = "2.0.1", features = [
 ] }
 cw-storage-plus = "2.0.0"
 cw2 = "2.0.0"
+prost = "0.12.3"
 schemars = "0.8.16"
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.58" }

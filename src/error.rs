@@ -7,7 +7,16 @@ pub enum ContractError {
     Std(#[from] StdError),
 
     #[error("Unauthorized")]
-    Unauthorized {},
+    Unauthorized,
     // Add any other custom errors you like here.
     // Look at https://docs.rs/thiserror/1.0.21/thiserror/ for details.
+
+    #[error("TokenAleardyExist")]
+    TokenAleardyExist,
+
+    #[error("TokenNotFound")]
+    TokenNotFound,
+
+    #[error("TicketAlreadyHandled")]
+    TicketAlreadyHandled,
 }

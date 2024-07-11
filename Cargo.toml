@@ -32,10 +32,10 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
-cosmos-sdk-proto = "0.22.0"
 cosmwasm-schema = "2.0.1"
 cosmwasm-std = { version = "2.0.1", features = [
-  "cosmwasm_1_3",
+  # "cosmwasm_1_3",
+  "stargate",
   # Enable this if you only deploy to chains that have CosmWasm 1.4 or higher
   # "cosmwasm_1_4",
 ] }

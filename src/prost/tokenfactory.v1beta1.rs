@@ -1,5 +1,3 @@
-use cosmos_sdk_proto::cosmos;
-
 /// DenomAuthorityMetadata specifies metadata for addresses that have specific
 /// capabilities over a token factory denom. Right now there is only one Admin
 /// permission, but is planned to be extended to the future.
@@ -16,7 +14,7 @@ pub struct Params {
     /// denom. The fee is drawn from the MsgCreateDenom's sender account, and
     /// transferred to the community pool.
     #[prost(message, repeated, tag = "1")]
-    pub denom_creation_fee: ::prost::alloc::vec::Vec<cosmos::base::v1beta1::Coin>,
+    pub denom_creation_fee: ::prost::alloc::vec::Vec<crate::cosmos::base::v1beta1::Coin>,
     /// DenomCreationGasConsume defines the gas cost for creating a new denom.
     /// This is intended as a spam deterrence mechanism.
     ///
@@ -114,7 +112,7 @@ pub struct MsgMint {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
-    pub amount: ::core::option::Option<cosmos::base::v1beta1::Coin>,
+    pub amount: ::core::option::Option<crate::cosmos::base::v1beta1::Coin>,
     #[prost(string, tag = "3")]
     pub mint_to_address: ::prost::alloc::string::String,
 }
@@ -129,7 +127,7 @@ pub struct MsgBurn {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
-    pub amount: ::core::option::Option<cosmos::base::v1beta1::Coin>,
+    pub amount: ::core::option::Option<crate::cosmos::base::v1beta1::Coin>,
     #[prost(string, tag = "3")]
     pub burn_from_address: ::prost::alloc::string::String,
 }
@@ -157,7 +155,7 @@ pub struct MsgSetDenomMetadata {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
-    pub metadata: ::core::option::Option<cosmos::bank::v1beta1::Metadata>,
+    pub metadata: ::core::option::Option<crate::cosmos::bank::v1beta1::Metadata>,
 }
 /// MsgSetDenomMetadataResponse defines the response structure for an executed
 /// MsgSetDenomMetadata message.
@@ -168,7 +166,7 @@ pub struct MsgForceTransfer {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
-    pub amount: ::core::option::Option<cosmos::base::v1beta1::Coin>,
+    pub amount: ::core::option::Option<crate::cosmos::base::v1beta1::Coin>,
     #[prost(string, tag = "3")]
     pub transfer_from_address: ::prost::alloc::string::String,
     #[prost(string, tag = "4")]

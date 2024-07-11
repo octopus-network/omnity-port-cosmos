@@ -45,7 +45,10 @@ mod tests {
             Uint128::new(1)
         );
 
-        let msg = InstantiateMsg { count: 1i32 };
+        let msg = InstantiateMsg {
+            owner: Addr::unchecked("wasm1rptjktp9md9u2jcjsxe4ehg3pmz5hfxquklwvt"),
+            chain_key: vec![],
+        };
         let cw_template_contract_addr = app
             .instantiate_contract(
                 cw_template_id,
@@ -64,13 +67,19 @@ mod tests {
 
     mod count {
         use super::*;
-        use crate::msg::ExecuteMsg;
+        use crate::msg::{Directive, ExecuteMsg};
 
         #[test]
         fn count() {
             let (mut app, cw_template_contract) = proper_instantiate();
 
-            let msg = ExecuteMsg::Increment {};
+            let msg = ExecuteMsg::ExecDirective {
+                directive: Directive::AddToken {
+                    token_id: "Bitcoin-runes-HOPE•YOU•GET•RICH".into(),
+                    name: "HOPE•YOU•GET•RICH".into(),
+                },
+                signature: vec![],
+            };
             let cosmos_msg = cw_template_contract.call(msg).unwrap();
             app.execute(Addr::unchecked(USER), cosmos_msg).unwrap();
         }

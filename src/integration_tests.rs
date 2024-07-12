@@ -46,7 +46,7 @@ mod tests {
         );
 
         let msg = InstantiateMsg {
-            owner: Addr::unchecked("wasm1rptjktp9md9u2jcjsxe4ehg3pmz5hfxquklwvt"),
+            route: Addr::unchecked("wasm1rptjktp9md9u2jcjsxe4ehg3pmz5hfxquklwvt"),
             chain_key: vec![],
         };
         let cw_template_contract_addr = app

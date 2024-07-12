@@ -9,7 +9,6 @@ use cosmwasm_std::{
     to_json_binary, Binary, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult,
 };
 use cw2::set_contract_version;
-use execute::redeem_token;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:omnity-port-cosmos";
@@ -23,7 +22,7 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let state = State {
-        owner: msg.owner.clone(),
+        route: msg.route.clone(),
         chain_key: msg.chain_key,
         tokens: BTreeMap::default(),
         handled_tickets: BTreeSet::default(),
@@ -37,7 +36,7 @@ pub fn instantiate(
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
-        .add_attribute("owner", msg.owner))
+        .add_attribute("owner", msg.route))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -64,7 +63,7 @@ pub fn execute(
             token_id,
             receiver,
             amount,
-        } => redeem_token(deps, env, info, token_id, receiver, amount),
+        } => execute::redeem_token(deps, env, info, token_id, receiver, amount),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
@@ -91,13 +90,18 @@ pub mod execute {
         _sig: Vec<u8>,
     ) -> Result<Response, ContractError> {
         let mut response = Response::new();
+        if read_state(deps.storage, |state| {
+            state.handled_directives.contains(&seq)
+        }) {
+            return Err(ContractError::DirectiveAlreadyHandled);
+        }
         match directive {
             Directive::AddToken {
                 settlement_chain,
                 token_id,
                 name,
             } => {
-                if read_state(deps.storage, |s| s.owner != info.sender) {
+                if read_state(deps.storage, |s| s.route != info.sender) {
                     return Err(ContractError::Unauthorized);
                 }
                 if read_state(deps.storage, |s| s.tokens.contains_key(&token_id)) {
@@ -164,18 +168,18 @@ pub mod execute {
         receiver: Addr,
         amount: String,
     ) -> Result<Response, ContractError> {
-        if read_state(deps.storage, |s| s.owner != info.sender) {
+        if read_state(deps.storage, |s| s.route != info.sender) {
             return Err(ContractError::Unauthorized);
+        }
+
+        if read_state(deps.storage, |s| s.handled_tickets.contains(&ticket_id)) {
+            return Err(ContractError::TicketAlreadyHandled);
         }
 
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
             Some(token) => Ok(token.clone()),
             None => Err(ContractError::TokenNotFound),
         })?;
-
-        if read_state(deps.storage, |s| s.handled_tickets.contains(&ticket_id)) {
-            return Err(ContractError::TicketAlreadyHandled);
-        }
 
         STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
             state.handled_tickets.insert(ticket_id.clone());
@@ -223,14 +227,13 @@ pub mod execute {
         })?;
 
         let fee = calculate_fee(deps, token.settlement_chain)?;
-        let fund = info
+        if info
             .funds
             .iter()
             .find(|coin| coin.denom == fee_token)
             .cloned()
-            .ok_or(ContractError::InsufficientFee)?;
-
-        if fund.amount < Uint128::from(fee) {
+            .map_or(true, |fund| fund.amount < Uint128::from(fee))
+        {
             return Err(ContractError::InsufficientFee);
         }
 
@@ -248,7 +251,7 @@ pub mod execute {
         };
 
         Ok(Response::new().add_message(cosmos_msg).add_event(
-            Event::new("TokenBurned").add_attributes(vec![
+            Event::new("RedeemRequested").add_attributes(vec![
                 Attribute::new("token_id", token_id),
                 Attribute::new("sender", info.sender),
                 Attribute::new("receiver", receiver),

@@ -17,6 +17,9 @@ pub enum ContractError {
     #[error("TokenNotFound")]
     TokenNotFound,
 
+    #[error("DirectiveAlreadyHandled")]
+    DirectiveAlreadyHandled,
+
     #[error("TicketAlreadyHandled")]
     TicketAlreadyHandled,
 

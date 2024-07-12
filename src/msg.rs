@@ -7,7 +7,7 @@ use crate::state::Token;
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub owner: Addr,
+    pub route: Addr,
     pub chain_key: Vec<u8>,
 }
 

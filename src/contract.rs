@@ -1,5 +1,5 @@
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetCountResponse, InstantiateMsg, QueryMsg};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{State, STATE};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -107,6 +107,7 @@ pub mod execute {
                 let sender = env.contract.address.to_string();
                 let denom = format!("factory/{}/{}", sender, name);
                 let token = Token {
+                    name: name.clone(),
                     denom: denom.clone(),
                     settlement_chain,
                 };
@@ -118,7 +119,7 @@ pub mod execute {
 
                 let msg = MsgCreateDenom {
                     sender,
-                    subdenom: name.clone(),
+                    subdenom: name,
                 };
                 let cosmos_msg = CosmosMsg::Stargate {
                     type_url: "/osmosis.tokenfactory.v1beta1.MsgCreateDenom".into(),
@@ -274,14 +275,35 @@ pub mod execute {
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_json_binary(&query::count(deps)?),
+        QueryMsg::GetTokenList => to_json_binary(&query::get_token_list(deps)?),
+        QueryMsg::GetFeeInfo => to_json_binary(&query::get_fee_info(deps)?),
     }
 }
 
 pub mod query {
+    use crate::{
+        msg::{GetFeeResponse, GetTokenResponse},
+        state::read_state,
+    };
+
     use super::*;
 
-    pub fn count(_deps: Deps) -> StdResult<GetCountResponse> {
-        Ok(GetCountResponse { count: 1 })
+    pub fn get_token_list(deps: Deps) -> StdResult<GetTokenResponse> {
+        let tokens = read_state(deps.storage, |state| {
+            state
+                .tokens
+                .iter()
+                .map(|(_, token)| token.clone())
+                .collect()
+        });
+        Ok(GetTokenResponse { tokens })
+    }
+
+    pub fn get_fee_info(deps: Deps) -> StdResult<GetFeeResponse> {
+        Ok(read_state(deps.storage, |state| GetFeeResponse {
+            fee_token: state.fee_token.clone(),
+            fee_token_factor: state.fee_token_factor.clone(),
+            target_chain_factor: state.target_chain_factor.clone(),
+        }))
     }
 }

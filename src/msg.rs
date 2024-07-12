@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Addr;
+
+use crate::state::Token;
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -54,13 +58,21 @@ pub enum Factor {
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    // GetCount returns the current count as a json-encoded number
-    #[returns(GetCountResponse)]
-    GetCount {},
+    #[returns(GetTokenResponse)]
+    GetTokenList,
+    #[returns(GetFeeResponse)]
+    GetFeeInfo,
 }
 
 // We define a custom struct for each query response
 #[cw_serde]
-pub struct GetCountResponse {
-    pub count: i32,
+pub struct GetTokenResponse {
+    pub tokens: Vec<Token>,
+}
+
+#[cw_serde]
+pub struct GetFeeResponse {
+    pub fee_token: Option<String>,
+    pub fee_token_factor: Option<u128>,
+    pub target_chain_factor: BTreeMap<String, u128>,
 }

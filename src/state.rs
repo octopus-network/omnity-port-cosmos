@@ -20,6 +20,7 @@ pub struct State {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct Token {
+    pub name: String,
     pub denom: String,
     pub settlement_chain: String,
 }

@@ -12,11 +12,16 @@ pub struct State {
     pub chain_key: Vec<u8>,
     pub tokens: BTreeMap<String, Token>,
     pub handled_tickets: BTreeSet<String>,
+    pub handled_directives: BTreeSet<u64>,
+    pub target_chain_factor: BTreeMap<String, u128>,
+    pub fee_token: Option<String>,
+    pub fee_token_factor: Option<u128>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct Token {
     pub denom: String,
+    pub settlement_chain: String,
 }
 
 pub const STATE: Item<State> = Item::new("state");

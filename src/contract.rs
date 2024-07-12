@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{
+    to_json_binary, Binary, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult,
+};
 use cw2::set_contract_version;
 use execute::redeem_token;
 
@@ -25,6 +27,10 @@ pub fn instantiate(
         chain_key: msg.chain_key,
         tokens: BTreeMap::default(),
         handled_tickets: BTreeSet::default(),
+        handled_directives: BTreeSet::default(),
+        target_chain_factor: BTreeMap::default(),
+        fee_token: None,
+        fee_token_factor: None,
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -41,11 +47,13 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
-    match msg {
+    let contract = env.contract.address.clone();
+    let response = match msg {
         ExecuteMsg::ExecDirective {
+            seq,
             directive,
             signature,
-        } => execute::exec_directive(deps, env, info, directive, signature),
+        } => execute::exec_directive(deps, env, info, seq, directive, signature),
         ExecuteMsg::PrivilegeMintToken {
             ticket_id,
             token_id,
@@ -57,16 +65,17 @@ pub fn execute(
             receiver,
             amount,
         } => redeem_token(deps, env, info, token_id, receiver, amount),
-    }
+    }?;
+    Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
 
 pub mod execute {
-    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event};
+    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event, Uint128};
     use prost::Message;
 
     use crate::{
         cosmos::base::v1beta1::Coin,
-        msg::Directive,
+        msg::{Directive, Factor},
         osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint},
         state::{read_state, Token},
     };
@@ -77,11 +86,17 @@ pub mod execute {
         deps: DepsMut,
         env: Env,
         info: MessageInfo,
+        seq: u64,
         directive: Directive,
         _sig: Vec<u8>,
     ) -> Result<Response, ContractError> {
+        let mut response = Response::new();
         match directive {
-            Directive::AddToken { token_id, name } => {
+            Directive::AddToken {
+                settlement_chain,
+                token_id,
+                name,
+            } => {
                 if read_state(deps.storage, |s| s.owner != info.sender) {
                     return Err(ContractError::Unauthorized);
                 }
@@ -91,27 +106,52 @@ pub mod execute {
 
                 let sender = env.contract.address.to_string();
                 let denom = format!("factory/{}/{}", sender, name);
+                let token = Token {
+                    denom: denom.clone(),
+                    settlement_chain,
+                };
 
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-                    state.tokens.insert(token_id.clone(), Token { denom });
+                    state.tokens.insert(token_id.clone(), token);
                     Ok(state)
                 })?;
 
                 let msg = MsgCreateDenom {
                     sender,
-                    subdenom: name,
+                    subdenom: name.clone(),
                 };
                 let cosmos_msg = CosmosMsg::Stargate {
                     type_url: "/osmosis.tokenfactory.v1beta1.MsgCreateDenom".into(),
                     value: Binary::new(msg.encode_to_vec()),
                 };
 
-                Ok(Response::new()
-                    .add_message(cosmos_msg)
-                    .add_attribute("action", "add token")
-                    .add_attribute("token_id", token_id))
+                response = response.add_message(cosmos_msg);
             }
-        }
+            Directive::UpdateFee { factor } => {
+                STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                    match factor {
+                        Factor::FeeTokenFactor {
+                            fee_token,
+                            fee_token_factor,
+                        } => {
+                            state.fee_token = Some(fee_token);
+                            state.fee_token_factor = Some(fee_token_factor);
+                        }
+                        Factor::TargetChainFactor {
+                            target_chain_id,
+                            target_chain_factor,
+                        } => {
+                            state
+                                .target_chain_factor
+                                .insert(target_chain_id, target_chain_factor);
+                        }
+                    }
+                    Ok(state)
+                })?;
+            }
+        };
+        Ok(response
+            .add_event(Event::new("DirectiveExecuted").add_attribute("sequence", seq.to_string())))
     }
 
     pub fn privilege_mint_token(
@@ -177,6 +217,22 @@ pub mod execute {
             None => Err(ContractError::TokenNotFound),
         })?;
 
+        let fee_token = read_state(deps.storage, |state| {
+            state.fee_token.clone().ok_or(ContractError::FeeHasNotSet)
+        })?;
+
+        let fee = calculate_fee(deps, token.settlement_chain)?;
+        let fund = info
+            .funds
+            .iter()
+            .find(|coin| coin.denom == fee_token)
+            .cloned()
+            .ok_or(ContractError::InsufficientFee)?;
+
+        if fund.amount < Uint128::from(fee) {
+            return Err(ContractError::InsufficientFee);
+        }
+
         let msg = MsgBurn {
             sender: env.contract.address.to_string(),
             amount: Some(Coin {
@@ -199,6 +255,20 @@ pub mod execute {
             ]),
         ))
     }
+
+    fn calculate_fee(deps: DepsMut, target_chain: String) -> Result<u128, ContractError> {
+        let fee_factor = read_state(deps.storage, |state| {
+            state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)
+        })?;
+        let chain_factor = read_state(deps.storage, |state| {
+            state
+                .target_chain_factor
+                .get(&target_chain)
+                .cloned()
+                .ok_or(ContractError::FeeHasNotSet)
+        })?;
+        Ok(fee_factor * chain_factor)
+    }
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -215,74 +285,3 @@ pub mod query {
         Ok(GetCountResponse { count: 1 })
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env};
-//     use cosmwasm_std::{coins, from_json, Addr};
-
-//     #[test]
-//     fn proper_initialization() {
-//         let mut deps = mock_dependencies();
-
-//         let msg = InstantiateMsg { count: 17 };
-//         let info = message_info(&Addr::unchecked("creator"), &coins(1000, "earth"));
-
-//         // we can just call .unwrap() to assert this was a success
-//         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-//         assert_eq!(0, res.messages.len());
-
-//         // it worked, let's query the state
-//         let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-//         let value: GetCountResponse = from_json(&res).unwrap();
-//         assert_eq!(17, value.count);
-//     }
-
-//     #[test]
-//     fn increment() {
-//         let mut deps = mock_dependencies();
-
-//         let msg = InstantiateMsg { count: 17 };
-//         let info = message_info(&Addr::unchecked("creator"), &coins(2, "token"));
-//         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-//         // beneficiary can release it
-//         let info = message_info(&Addr::unchecked("anyone"), &coins(2, "token"));
-//         let msg = ExecuteMsg::Increment {};
-//         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-//         // should increase counter by 1
-//         let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-//         let value: GetCountResponse = from_json(&res).unwrap();
-//         assert_eq!(18, value.count);
-//     }
-
-//     #[test]
-//     fn reset() {
-//         let mut deps = mock_dependencies();
-
-//         let msg = InstantiateMsg { count: 17 };
-//         let info = message_info(&Addr::unchecked("creator"), &coins(2, "token"));
-//         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-//         // beneficiary can release it
-//         let unauth_info = message_info(&Addr::unchecked("anyone"), &coins(2, "token"));
-//         let msg = ExecuteMsg::Reset { count: 5 };
-//         let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-//         match res {
-//             Err(ContractError::Unauthorized {}) => {}
-//             _ => panic!("Must return unauthorized error"),
-//         }
-
-//         // only the original creator can reset the counter
-//         let auth_info = message_info(&Addr::unchecked("creator"), &coins(2, "token"));
-//         let msg = ExecuteMsg::Reset { count: 5 };
-//         let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
-
-//         // should now be 5
-//         let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-//         let value: GetCountResponse = from_json(&res).unwrap();
-//         assert_eq!(5, value.count);
-//     }
-// }

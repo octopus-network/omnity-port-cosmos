@@ -19,4 +19,11 @@ pub enum ContractError {
 
     #[error("TicketAlreadyHandled")]
     TicketAlreadyHandled,
+
+    #[error("FeeHasNotSet")]
+    FeeHasNotSet,
+
+    #[error("InsufficientFee")]
+    InsufficientFee,
+
 }

@@ -10,6 +10,7 @@ pub struct InstantiateMsg {
 #[cw_serde]
 pub enum ExecuteMsg {
     ExecDirective {
+        seq: u64,
         directive: Directive,
         signature: Vec<u8>,
     },
@@ -28,7 +29,26 @@ pub enum ExecuteMsg {
 
 #[cw_serde]
 pub enum Directive {
-    AddToken { token_id: String, name: String },
+    AddToken {
+        settlement_chain: String,
+        token_id: String,
+        name: String,
+    },
+    UpdateFee {
+        factor: Factor,
+    },
+}
+
+#[cw_serde]
+pub enum Factor {
+    FeeTokenFactor {
+        fee_token: String,
+        fee_token_factor: u128,
+    },
+    TargetChainFactor {
+        target_chain_id: String,
+        target_chain_factor: u128,
+    },
 }
 
 #[cw_serde]

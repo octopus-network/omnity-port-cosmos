@@ -74,8 +74,10 @@ mod tests {
             let (mut app, cw_template_contract) = proper_instantiate();
 
             let msg = ExecuteMsg::ExecDirective {
+                seq: 1,
                 directive: Directive::AddToken {
                     token_id: "Bitcoin-runes-HOPE•YOU•GET•RICH".into(),
+                    settlement_chain: "Bitcoin".into(),
                     name: "HOPE•YOU•GET•RICH".into(),
                 },
                 signature: vec![],

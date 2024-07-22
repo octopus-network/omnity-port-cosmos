@@ -8,7 +8,6 @@ use crate::state::Token;
 #[cw_serde]
 pub struct InstantiateMsg {
     pub route: Addr,
-    pub chain_key: Vec<u8>,
 }
 
 #[cw_serde]
@@ -16,7 +15,6 @@ pub enum ExecuteMsg {
     ExecDirective {
         seq: u64,
         directive: Directive,
-        signature: Vec<u8>,
     },
     PrivilegeMintToken {
         ticket_id: String,

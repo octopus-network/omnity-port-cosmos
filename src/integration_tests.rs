@@ -47,7 +47,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             route: Addr::unchecked("wasm1rptjktp9md9u2jcjsxe4ehg3pmz5hfxquklwvt"),
-            chain_key: vec![],
         };
         let cw_template_contract_addr = app
             .instantiate_contract(
@@ -80,7 +79,6 @@ mod tests {
                     settlement_chain: "Bitcoin".into(),
                     name: "HOPE•YOU•GET•RICH".into(),
                 },
-                signature: vec![],
             };
             let cosmos_msg = cw_template_contract.call(msg).unwrap();
             app.execute(Addr::unchecked(USER), cosmos_msg).unwrap();

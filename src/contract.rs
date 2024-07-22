@@ -23,7 +23,6 @@ pub fn instantiate(
 ) -> Result<Response, ContractError> {
     let state = State {
         route: msg.route.clone(),
-        chain_key: msg.chain_key,
         tokens: BTreeMap::default(),
         handled_tickets: BTreeSet::default(),
         handled_directives: BTreeSet::default(),
@@ -36,7 +35,7 @@ pub fn instantiate(
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
-        .add_attribute("owner", msg.route))
+        .add_attribute("route", msg.route))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -48,11 +47,9 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     let contract = env.contract.address.clone();
     let response = match msg {
-        ExecuteMsg::ExecDirective {
-            seq,
-            directive,
-            signature,
-        } => execute::exec_directive(deps, env, info, seq, directive, signature),
+        ExecuteMsg::ExecDirective { seq, directive } => {
+            execute::exec_directive(deps, env, info, seq, directive)
+        }
         ExecuteMsg::PrivilegeMintToken {
             ticket_id,
             token_id,
@@ -87,9 +84,13 @@ pub mod execute {
         info: MessageInfo,
         seq: u64,
         directive: Directive,
-        _sig: Vec<u8>,
     ) -> Result<Response, ContractError> {
         let mut response = Response::new();
+
+        if read_state(deps.storage, |s| s.route != info.sender) {
+            return Err(ContractError::Unauthorized);
+        }
+
         if read_state(deps.storage, |state| {
             state.handled_directives.contains(&seq)
         }) {
@@ -101,9 +102,6 @@ pub mod execute {
                 token_id,
                 name,
             } => {
-                if read_state(deps.storage, |s| s.route != info.sender) {
-                    return Err(ContractError::Unauthorized);
-                }
                 if read_state(deps.storage, |s| s.tokens.contains_key(&token_id)) {
                     return Err(ContractError::TokenAleardyExist);
                 }

@@ -61,6 +61,12 @@ pub fn execute(
             receiver,
             amount,
         } => execute::redeem_token(deps, env, info, token_id, receiver, amount),
+        ExecuteMsg::MintRunes { token_id, receiver } => {
+            execute::mint_runes(deps, info, token_id, receiver)
+        }
+        ExecuteMsg::BurnToken { token_id, amount } => {
+            execute::burn_token(deps, env, info, token_id, amount)
+        }
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
@@ -220,6 +226,96 @@ pub mod execute {
             None => Err(ContractError::TokenNotFound),
         })?;
 
+        check_fee(&deps, &info, token.clone())?;
+
+        let burn_msg = build_burn_msg(
+            env.contract.address,
+            info.sender.clone(),
+            token.denom,
+            amount.clone(),
+        );
+        Ok(Response::new().add_message(burn_msg).add_event(
+            Event::new("RedeemRequested").add_attributes(vec![
+                Attribute::new("token_id", token_id),
+                Attribute::new("sender", info.sender),
+                Attribute::new("receiver", receiver),
+                Attribute::new("amount", amount),
+            ]),
+        ))
+    }
+
+    pub fn mint_runes(
+        deps: DepsMut,
+        info: MessageInfo,
+        token_id: String,
+        receiver: Addr,
+    ) -> Result<Response, ContractError> {
+        let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
+            Some(token) => Ok(token.clone()),
+            None => Err(ContractError::TokenNotFound),
+        })?;
+        if !token_id.starts_with("Bitcoin-runes-") {
+            return Err(ContractError::TokenUnsupportMint);
+        }
+
+        check_fee(&deps, &info, token)?;
+
+        Ok(
+            Response::new().add_event(Event::new("RunesMintRequested").add_attributes(vec![
+                Attribute::new("token_id", token_id),
+                Attribute::new("sender", info.sender),
+                Attribute::new("receiver", receiver),
+            ])),
+        )
+    }
+
+    pub fn burn_token(
+        deps: DepsMut,
+        env: Env,
+        info: MessageInfo,
+        token_id: String,
+        amount: String,
+    ) -> Result<Response, ContractError> {
+        let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
+            Some(token) => Ok(token.clone()),
+            None => Err(ContractError::TokenNotFound),
+        })?;
+
+        check_fee(&deps, &info, token.clone())?;
+
+        let burn_msg = build_burn_msg(
+            env.contract.address,
+            info.sender.clone(),
+            token.denom,
+            amount.clone(),
+        );
+        Ok(Response::new().add_message(burn_msg).add_event(
+            Event::new("TokenBurned").add_attributes(vec![
+                Attribute::new("token_id", token_id),
+                Attribute::new("sender", info.sender),
+                Attribute::new("amount", amount),
+            ]),
+        ))
+    }
+
+    fn build_burn_msg(
+        contract_addr: Addr,
+        sender: Addr,
+        denom: String,
+        amount: String,
+    ) -> CosmosMsg {
+        let msg = MsgBurn {
+            sender: contract_addr.to_string(),
+            amount: Some(Coin { denom, amount }),
+            burn_from_address: sender.to_string(),
+        };
+        CosmosMsg::Stargate {
+            type_url: "/osmosis.tokenfactory.v1beta1.MsgBurn".into(),
+            value: Binary::new(msg.encode_to_vec()),
+        }
+    }
+
+    fn check_fee(deps: &DepsMut, info: &MessageInfo, token: Token) -> Result<(), ContractError> {
         let fee_token = read_state(deps.storage, |state| {
             state.fee_token.clone().ok_or(ContractError::FeeHasNotSet)
         })?;
@@ -234,31 +330,10 @@ pub mod execute {
         {
             return Err(ContractError::InsufficientFee);
         }
-
-        let msg = MsgBurn {
-            sender: env.contract.address.to_string(),
-            amount: Some(Coin {
-                denom: token.denom,
-                amount: amount.clone(),
-            }),
-            burn_from_address: info.sender.to_string(),
-        };
-        let cosmos_msg = CosmosMsg::Stargate {
-            type_url: "/osmosis.tokenfactory.v1beta1.MsgBurn".into(),
-            value: Binary::new(msg.encode_to_vec()),
-        };
-
-        Ok(Response::new().add_message(cosmos_msg).add_event(
-            Event::new("RedeemRequested").add_attributes(vec![
-                Attribute::new("token_id", token_id),
-                Attribute::new("sender", info.sender),
-                Attribute::new("receiver", receiver),
-                Attribute::new("amount", amount),
-            ]),
-        ))
+        Ok(())
     }
 
-    fn calculate_fee(deps: DepsMut, target_chain: String) -> Result<u128, ContractError> {
+    fn calculate_fee(deps: &DepsMut, target_chain: String) -> Result<u128, ContractError> {
         let fee_factor = read_state(deps.storage, |state| {
             state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)
         })?;

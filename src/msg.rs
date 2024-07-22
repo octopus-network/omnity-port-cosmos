@@ -27,6 +27,14 @@ pub enum ExecuteMsg {
         receiver: String,
         amount: String,
     },
+    MintRunes {
+        token_id: String,
+        receiver: Addr,
+    },
+    BurnToken {
+        token_id: String,
+        amount: String,
+    },
 }
 
 #[cw_serde]

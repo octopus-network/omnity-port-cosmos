@@ -9,6 +9,7 @@ use cw_storage_plus::Item;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct State {
     pub route: Addr,
+    pub admin: Addr,
     pub tokens: BTreeMap<String, Token>,
     pub handled_tickets: BTreeSet<String>,
     pub handled_directives: BTreeSet<u64>,

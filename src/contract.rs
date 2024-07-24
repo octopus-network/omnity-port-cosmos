@@ -18,11 +18,12 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let state = State {
         route: msg.route.clone(),
+        admin: info.sender,
         tokens: BTreeMap::default(),
         handled_tickets: BTreeSet::default(),
         handled_directives: BTreeSet::default(),
@@ -67,6 +68,7 @@ pub fn execute(
         ExecuteMsg::BurnToken { token_id, amount } => {
             execute::burn_token(deps, env, info, token_id, amount)
         }
+        ExecuteMsg::UpdateRoute { route } => execute::update_route(deps, info, route),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
@@ -295,6 +297,25 @@ pub mod execute {
                 Attribute::new("sender", info.sender),
                 Attribute::new("amount", amount),
             ]),
+        ))
+    }
+
+    pub fn update_route(
+        deps: DepsMut,
+        info: MessageInfo,
+        route: Addr,
+    ) -> Result<Response, ContractError> {
+        if read_state(deps.storage, |s| info.sender != s.admin) {
+            return Err(ContractError::Unauthorized);
+        }
+
+        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+            state.route = route.clone();
+            Ok(state)
+        })?;
+
+        Ok(Response::new().add_event(
+            Event::new("RouteUpdated").add_attributes(vec![Attribute::new("new_route", route)]),
         ))
     }
 

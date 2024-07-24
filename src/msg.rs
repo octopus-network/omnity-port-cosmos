@@ -35,6 +35,9 @@ pub enum ExecuteMsg {
         token_id: String,
         amount: String,
     },
+    UpdateRoute {
+        route: Addr,
+    }
 }
 
 #[cw_serde]

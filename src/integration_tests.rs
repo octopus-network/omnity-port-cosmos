@@ -47,6 +47,7 @@ mod tests {
 
         let msg = InstantiateMsg {
             route: Addr::unchecked("wasm1rptjktp9md9u2jcjsxe4ehg3pmz5hfxquklwvt"),
+            chain_id: "chain".to_string(),
         };
         let cw_template_contract_addr = app
             .instantiate_contract(
@@ -65,8 +66,10 @@ mod tests {
     }
 
     mod count {
+        use std::collections::HashMap;
+
         use super::*;
-        use crate::msg::{Directive, ExecuteMsg};
+        use crate::{msg::ExecuteMsg, route::{Directive, Token}};
 
         #[test]
         fn count() {
@@ -74,11 +77,19 @@ mod tests {
 
             let msg = ExecuteMsg::ExecDirective {
                 seq: 1,
-                directive: Directive::AddToken {
+                directive: Directive::AddToken(Token {
                     token_id: "Bitcoin-runes-HOPE•YOU•GET•RICH".into(),
-                    settlement_chain: "Bitcoin".into(),
-                    name: "HOPE•YOU•GET•RICH".into(),
-                },
+                    name: "HOPE•YOU•GET".to_string(),
+                    symbol: "RICH".to_string(),
+                    decimals: 2,
+                    icon: Some("icon".to_string()),
+                    metadata: HashMap::new(),
+                }) 
+                // {
+                //     token_id: "Bitcoin-runes-HOPE•YOU•GET•RICH".into(),
+                //     settlement_chain: "Bitcoin".into(),
+                //     name: "HOPE•YOU•GET•RICH".into(),
+                // },
             };
             let cosmos_msg = cw_template_contract.call(msg).unwrap();
             app.execute(Addr::unchecked(USER), cosmos_msg).unwrap();

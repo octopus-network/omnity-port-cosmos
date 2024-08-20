@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use cosmwasm_std::{Addr, Storage};
 use cw_storage_plus::Item;
 
+use crate::route::{Chain, ChainId, ChainState, Token};
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct State {
     pub route: Addr,
@@ -16,13 +18,9 @@ pub struct State {
     pub target_chain_factor: BTreeMap<String, u128>,
     pub fee_token: Option<String>,
     pub fee_token_factor: Option<u128>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct Token {
-    pub name: String,
-    pub denom: String,
-    pub settlement_chain: String,
+    pub counterparties: BTreeMap<ChainId, Chain>,
+    pub chain_id: ChainId,
+    pub chain_state: ChainState
 }
 
 pub const STATE: Item<State> = Item::new("state");

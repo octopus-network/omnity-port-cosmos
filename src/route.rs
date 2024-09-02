@@ -108,6 +108,34 @@ pub struct FeeTokenFactor {
 }
 
 #[test]
+pub fn test_update_fee() {
+    let fee_token_factor = Factor::UpdateFeeTokenFactor(FeeTokenFactor {
+        fee_token: "uosmo".to_string(),
+        fee_token_factor: 10000,
+    });
+
+    let target_chain_factor = Factor::UpdateTargetChainFactor(TargetChainFactor {
+        target_chain_id: "mock_chain".to_string(),
+        target_chain_factor: 1,
+    });
+
+    let msg = ExecuteMsg::ExecDirective {
+        seq: 0,
+        directive: Directive::UpdateFee(fee_token_factor),
+    };
+
+    let s = serde_json::to_string(&msg).unwrap();
+    dbg!(&s);
+
+    let msg = ExecuteMsg::ExecDirective {
+        seq: 0,
+        directive: Directive::UpdateFee(target_chain_factor),
+    };
+
+    dbg!(&serde_json::to_string(&msg).unwrap());
+}
+
+#[test]
 pub fn test_token_cw_serde() {
     let token = Token {
         token_id: "1".to_string(),

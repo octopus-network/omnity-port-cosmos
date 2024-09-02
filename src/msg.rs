@@ -83,9 +83,9 @@ pub enum ToggleAction {
 #[derive(QueryResponses)]
 pub enum QueryMsg {
     #[returns(GetTokenResponse)]
-    GetTokenList,
+    GetTokenList {},
     #[returns(GetFeeResponse)]
-    GetFeeInfo,
+    GetFeeInfo {},
 }
 
 // We define a custom struct for each query response

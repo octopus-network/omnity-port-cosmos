@@ -32,4 +32,7 @@ pub enum ContractError {
     #[error("InsufficientFee")]
     InsufficientFee,
 
+    #[error("ChainNotFound")]
+    ChainNotFound,
+
 }

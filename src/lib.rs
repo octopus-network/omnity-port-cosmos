@@ -4,8 +4,10 @@ pub mod helpers;
 pub mod integration_tests;
 pub mod msg;
 pub mod state;
+pub mod route;
 
 pub use crate::error::ContractError;
+pub use cosmwasm_schema::cw_serde;
 
 mod osmosis {
     pub mod tokenfactory {

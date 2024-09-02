@@ -48,3 +48,4 @@ thiserror = { version = "1.0.58" }
 
 [dev-dependencies]
 cw-multi-test = "2.0.0"
+serde_json ={ version = "^1"}

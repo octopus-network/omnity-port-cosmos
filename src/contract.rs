@@ -1,5 +1,6 @@
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::route::ChainState;
 use crate::state::{State, STATE};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,6 +31,9 @@ pub fn instantiate(
         target_chain_factor: BTreeMap::default(),
         fee_token: None,
         fee_token_factor: None,
+        counterparties: BTreeMap::default(),
+        chain_id: msg.chain_id,
+        chain_state: ChainState::Active,
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -48,6 +52,10 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     let contract = env.contract.address.clone();
     let response = match msg {
+        ExecuteMsg::TestMsg { text } => {
+            let msg = format!("{}: {}", info.sender, text);
+            Ok(Response::new().add_attribute("message", msg))
+        }
         ExecuteMsg::ExecDirective { seq, directive } => {
             execute::exec_directive(deps, env, info, seq, directive)
         }
@@ -61,13 +69,18 @@ pub fn execute(
             token_id,
             receiver,
             amount,
-        } => execute::redeem_token(deps, env, info, token_id, receiver, amount),
-        ExecuteMsg::MintRunes { token_id, receiver } => {
-            execute::mint_runes(deps, info, token_id, receiver)
-        }
-        ExecuteMsg::BurnToken { token_id, amount } => {
-            execute::burn_token(deps, env, info, token_id, amount)
-        }
+            target_chain,
+        } => execute::redeem_token(deps, env, info, token_id, receiver, amount, target_chain),
+        ExecuteMsg::MintRunes {
+            token_id,
+            receiver,
+            target_chain,
+        } => execute::mint_runes(deps, info, token_id, receiver, target_chain),
+        ExecuteMsg::BurnToken {
+            token_id,
+            amount,
+            target_chain,
+        } => execute::burn_token(deps, env, info, token_id, amount, target_chain),
         ExecuteMsg::UpdateRoute { route } => execute::update_route(deps, info, route),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
@@ -79,9 +92,9 @@ pub mod execute {
 
     use crate::{
         cosmos::base::v1beta1::Coin,
-        msg::{Directive, Factor},
         osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint},
-        state::{read_state, Token},
+        route::{Directive, Factor, Token},
+        state::read_state,
     };
 
     use super::*;
@@ -95,41 +108,36 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let mut response = Response::new();
 
-        if read_state(deps.storage, |s| s.route != info.sender) {
-            return Err(ContractError::Unauthorized);
-        }
+        // if read_state(deps.storage, |s| s.route != info.sender) {
+        //     return Err(ContractError::Unauthorized);
+        // }
 
+        // todo need to save handled directive
         if read_state(deps.storage, |state| {
             state.handled_directives.contains(&seq)
         }) {
             return Err(ContractError::DirectiveAlreadyHandled);
         }
         match directive {
-            Directive::AddToken {
-                settlement_chain,
-                token_id,
-                name,
-            } => {
-                if read_state(deps.storage, |s| s.tokens.contains_key(&token_id)) {
+            Directive::AddToken(token) => {
+                if read_state(deps.storage, |s| s.tokens.contains_key(&token.token_id)) {
                     return Err(ContractError::TokenAleardyExist);
                 }
+                // if read_state(deps.storage, |s| s.route != info.sender) {
+                //     return Err(ContractError::Unauthorized);
+                // }
 
                 let sender = env.contract.address.to_string();
-                let denom = format!("factory/{}/{}", sender, name);
-                let token = Token {
-                    name: name.clone(),
-                    denom: denom.clone(),
-                    settlement_chain,
-                };
+                // let denom = format!("factory/{}/{}", sender, token.name);
 
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-                    state.tokens.insert(token_id.clone(), token);
+                    state.tokens.insert(token.token_id.clone(), token.clone());
                     Ok(state)
                 })?;
 
                 let msg = MsgCreateDenom {
                     sender,
-                    subdenom: name,
+                    subdenom: token.token_id,
                 };
                 let cosmos_msg = CosmosMsg::Stargate {
                     type_url: "/osmosis.tokenfactory.v1beta1.MsgCreateDenom".into(),
@@ -138,25 +146,42 @@ pub mod execute {
 
                 response = response.add_message(cosmos_msg);
             }
-            Directive::UpdateFee { factor } => {
+            Directive::UpdateFee(factor) => {
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
                     match factor {
-                        Factor::FeeTokenFactor {
-                            fee_token,
-                            fee_token_factor,
-                        } => {
-                            state.fee_token = Some(fee_token);
-                            state.fee_token_factor = Some(fee_token_factor);
+                        Factor::UpdateFeeTokenFactor(fee_token_factor) => {
+                            state.fee_token = Some(fee_token_factor.fee_token);
+                            state.fee_token_factor = Some(fee_token_factor.fee_token_factor);
                         }
-                        Factor::TargetChainFactor {
-                            target_chain_id,
-                            target_chain_factor,
-                        } => {
-                            state
-                                .target_chain_factor
-                                .insert(target_chain_id, target_chain_factor);
+                        Factor::UpdateTargetChainFactor(target_chain_factor) => {
+                            state.target_chain_factor.insert(
+                                target_chain_factor.target_chain_id,
+                                target_chain_factor.target_chain_factor,
+                            );
                         }
                     }
+                    Ok(state)
+                })?;
+            }
+            Directive::AddChain(chain) | Directive::UpdateChain(chain) => {
+                STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                    state.counterparties.insert(chain.chain_id.clone(), chain);
+                    Ok(state)
+                })?;
+            }
+            Directive::UpdateToken(_) => todo!(),
+            Directive::ToggleChainState(toggle_state) => {
+                STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                    if toggle_state.chain_id == state.chain_id {
+                        state.chain_state = toggle_state.action.into();
+                    } else {
+                        let chain = state
+                            .counterparties
+                            .get_mut(&toggle_state.chain_id)
+                            .ok_or(ContractError::ChainNotFound)?;
+                        chain.chain_state = toggle_state.action.into();
+                    }
+
                     Ok(state)
                 })?;
             }
@@ -174,9 +199,9 @@ pub mod execute {
         receiver: Addr,
         amount: String,
     ) -> Result<Response, ContractError> {
-        if read_state(deps.storage, |s| s.route != info.sender) {
-            return Err(ContractError::Unauthorized);
-        }
+        // if read_state(deps.storage, |s| s.route != info.sender) {
+        //     return Err(ContractError::Unauthorized);
+        // }
 
         if read_state(deps.storage, |s| s.handled_tickets.contains(&ticket_id)) {
             return Err(ContractError::TicketAlreadyHandled);
@@ -192,10 +217,13 @@ pub mod execute {
             Ok(state)
         })?;
 
+        let denom = format!("factory/{}/{}", env.contract.address.to_string(), token.name);
+
         let msg = MsgMint {
             sender: env.contract.address.to_string(),
             amount: Some(Coin {
-                denom: token.denom,
+                // todo if token name can always be used as denom
+                denom: denom.clone(),
                 amount: amount.clone(),
             }),
             mint_to_address: receiver.to_string(),
@@ -222,18 +250,20 @@ pub mod execute {
         token_id: String,
         receiver: String,
         amount: String,
+        target_chain: String,
     ) -> Result<Response, ContractError> {
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
             Some(token) => Ok(token.clone()),
             None => Err(ContractError::TokenNotFound),
         })?;
 
-        check_fee(&deps, &info, token.clone())?;
+        check_fee(&deps, &info,  target_chain.clone())?;
+        let denom = format!("factory/{}/{}", env.contract.address.to_string(), token.name);
 
         let burn_msg = build_burn_msg(
             env.contract.address,
             info.sender.clone(),
-            token.denom,
+            denom,
             amount.clone(),
         );
         Ok(Response::new().add_message(burn_msg).add_event(
@@ -242,6 +272,7 @@ pub mod execute {
                 Attribute::new("sender", info.sender),
                 Attribute::new("receiver", receiver),
                 Attribute::new("amount", amount),
+                Attribute::new("target_chain", target_chain),
             ]),
         ))
     }
@@ -251,16 +282,17 @@ pub mod execute {
         info: MessageInfo,
         token_id: String,
         receiver: Addr,
+        target_chain: String,
     ) -> Result<Response, ContractError> {
-        let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
-            Some(token) => Ok(token.clone()),
-            None => Err(ContractError::TokenNotFound),
-        })?;
+        // let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
+        //     Some(token) => Ok(token.clone()),
+        //     None => Err(ContractError::TokenNotFound),
+        // })?;
         if !token_id.starts_with("Bitcoin-runes-") {
             return Err(ContractError::TokenUnsupportMint);
         }
 
-        check_fee(&deps, &info, token)?;
+        check_fee(&deps, &info, target_chain)?;
 
         Ok(
             Response::new().add_event(Event::new("RunesMintRequested").add_attributes(vec![
@@ -277,18 +309,19 @@ pub mod execute {
         info: MessageInfo,
         token_id: String,
         amount: String,
+        target_chain: String,
     ) -> Result<Response, ContractError> {
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
             Some(token) => Ok(token.clone()),
             None => Err(ContractError::TokenNotFound),
         })?;
 
-        check_fee(&deps, &info, token.clone())?;
+        check_fee(&deps, &info, target_chain)?;
 
         let burn_msg = build_burn_msg(
             env.contract.address,
             info.sender.clone(),
-            token.denom,
+            token.name,
             amount.clone(),
         );
         Ok(Response::new().add_message(burn_msg).add_event(
@@ -336,12 +369,16 @@ pub mod execute {
         }
     }
 
-    fn check_fee(deps: &DepsMut, info: &MessageInfo, token: Token) -> Result<(), ContractError> {
+    fn check_fee(
+        deps: &DepsMut,
+        info: &MessageInfo,
+        target_chain: String,
+    ) -> Result<(), ContractError> {
         let fee_token = read_state(deps.storage, |state| {
             state.fee_token.clone().ok_or(ContractError::FeeHasNotSet)
         })?;
 
-        let fee = calculate_fee(deps, token.settlement_chain)?;
+        let fee = calculate_fee(deps, target_chain)?;
         if info
             .funds
             .iter()
@@ -372,8 +409,8 @@ pub mod execute {
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetTokenList => to_json_binary(&query::get_token_list(deps)?),
-        QueryMsg::GetFeeInfo => to_json_binary(&query::get_fee_info(deps)?),
+        QueryMsg::GetTokenList {} => to_json_binary(&query::get_token_list(deps)?),
+        QueryMsg::GetFeeInfo {}=> to_json_binary(&query::get_fee_info(deps)?),
     }
 }
 

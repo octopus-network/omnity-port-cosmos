@@ -1,7 +1,4 @@
 use std::collections::HashMap;
-
-use msg::ExecuteMsg;
-
 use crate::*;
 
 pub type ChainId = String;
@@ -109,6 +106,7 @@ pub struct FeeTokenFactor {
 
 #[test]
 pub fn test_update_fee() {
+    use msg::ExecuteMsg;
     let fee_token_factor = Factor::UpdateFeeTokenFactor(FeeTokenFactor {
         fee_token: "uosmo".to_string(),
         fee_token_factor: 10000,
@@ -137,6 +135,7 @@ pub fn test_update_fee() {
 
 #[test]
 pub fn test_token_cw_serde() {
+    use msg::ExecuteMsg;
     let token = Token {
         token_id: "1".to_string(),
         name: "Rune".to_string(),

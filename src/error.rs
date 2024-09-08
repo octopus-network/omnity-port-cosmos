@@ -29,10 +29,19 @@ pub enum ContractError {
     #[error("FeeHasNotSet")]
     FeeHasNotSet,
 
-    #[error("InsufficientFee")]
-    InsufficientFee,
+    #[error("InsufficientFee, required: {0}, attach: {1}, funds: {2}")]
+    InsufficientFee(u128, u128, String),
 
     #[error("ChainNotFound")]
     ChainNotFound,
 
+    #[error("Semver parsing error: {0}")]
+    SemVer(String),
+
+}
+
+impl From<semver::Error> for ContractError {
+    fn from(err: semver::Error) -> Self {
+        Self::SemVer(err.to_string())
+    }
 }

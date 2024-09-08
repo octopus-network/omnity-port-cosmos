@@ -1,19 +1,42 @@
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{ExecuteMsg, GetTargetChainFeeResponse, InstantiateMsg, QueryMsg};
 use crate::route::ChainState;
-use crate::state::{State, STATE};
+use crate::state::{read_state, State, STATE};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Binary, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult,
+    to_json_binary, Binary, Deps, DepsMut, Empty, Env, Event, MessageInfo, Response, StdError, StdResult
 };
 use cw2::set_contract_version;
+use semver::Version;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:omnity-port-cosmos";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[entry_point]
+pub fn migrate(deps: DepsMut, _env: Env, _msg: Empty) -> Result<Response, ContractError> {
+    let new_semver_version: Version = CONTRACT_VERSION.parse()?;
+    let old_contract_version = cw2::get_contract_version(deps.storage)?;
+    let old_semver_version: Version = old_contract_version.version.parse()?;
+    // ensure we are migrating from an allowed contract
+    if old_contract_version.contract != CONTRACT_NAME {
+        return Err(StdError::generic_err("Can only upgrade from same type").into());
+    }
+    // note: better to do proper semver compare, but string compare *usually* works
+    if old_semver_version >= new_semver_version {
+        return Err(StdError::generic_err("Cannot upgrade from a newer version").into());
+    }
+    
+    // set the new version
+    cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+    
+    // do any desired state migrations...
+    
+    Ok(Response::default())
+}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -52,10 +75,6 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     let contract = env.contract.address.clone();
     let response = match msg {
-        ExecuteMsg::TestMsg { text } => {
-            let msg = format!("{}: {}", info.sender, text);
-            Ok(Response::new().add_attribute("message", msg))
-        }
         ExecuteMsg::ExecDirective { seq, directive } => {
             execute::exec_directive(deps, env, info, seq, directive)
         }
@@ -71,33 +90,31 @@ pub fn execute(
             amount,
             target_chain,
         } => execute::redeem_token(deps, env, info, token_id, receiver, amount, target_chain),
-        ExecuteMsg::MintRunes {
-            token_id,
-            receiver,
-            target_chain,
-        } => execute::mint_runes(deps, info, token_id, receiver, target_chain),
-        ExecuteMsg::BurnToken {
-            token_id,
-            amount,
-            target_chain,
-        } => execute::burn_token(deps, env, info, token_id, amount, target_chain),
         ExecuteMsg::UpdateRoute { route } => execute::update_route(deps, info, route),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
 
 pub mod execute {
-    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event, Uint128};
+    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event};
     use prost::Message;
 
     use crate::{
-        cosmos::base::v1beta1::Coin,
-        osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint},
-        route::{Directive, Factor, Token},
+        cosmos::{
+            bank::v1beta1::{DenomUnit, Metadata},
+            base::v1beta1::Coin,
+        },
+        osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint, MsgSetDenomMetadata},
+        route::{Directive, Factor},
         state::read_state,
     };
 
     use super::*;
+
+    pub fn token_denom(address: String, token_id: String) -> String {
+        let denom = format!("factory/{}/{}", address, token_id);
+        return denom;
+    }
 
     pub fn exec_directive(
         deps: DepsMut,
@@ -108,24 +125,22 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let mut response = Response::new();
 
-        // if read_state(deps.storage, |s| s.route != info.sender) {
-        //     return Err(ContractError::Unauthorized);
-        // }
+        if read_state(deps.storage, |s| s.route != info.sender) {
+            return Err(ContractError::Unauthorized);
+        }
 
-        // todo need to save handled directive
         if read_state(deps.storage, |state| {
             state.handled_directives.contains(&seq)
         }) {
             return Err(ContractError::DirectiveAlreadyHandled);
         }
+
         match directive {
             Directive::AddToken(token) => {
                 if read_state(deps.storage, |s| s.tokens.contains_key(&token.token_id)) {
                     return Err(ContractError::TokenAleardyExist);
                 }
-                // if read_state(deps.storage, |s| s.route != info.sender) {
-                //     return Err(ContractError::Unauthorized);
-                // }
+              
 
                 let sender = env.contract.address.to_string();
                 // let denom = format!("factory/{}/{}", sender, token.name);
@@ -136,15 +151,46 @@ pub mod execute {
                 })?;
 
                 let msg = MsgCreateDenom {
-                    sender,
-                    subdenom: token.token_id,
+                    sender: sender.clone(),
+                    subdenom: token.token_id.clone(),
                 };
                 let cosmos_msg = CosmosMsg::Stargate {
                     type_url: "/osmosis.tokenfactory.v1beta1.MsgCreateDenom".into(),
                     value: Binary::new(msg.encode_to_vec()),
                 };
 
-                response = response.add_message(cosmos_msg);
+                let token_base_denom =
+                    token_denom(env.contract.address.to_string(), token.token_id);
+                let set_denom_metadata_msg = MsgSetDenomMetadata {
+                    sender: sender.clone(),
+                    metadata: Some(Metadata {
+                        description: token.name.clone(),
+                        denom_units: vec![
+                            DenomUnit {
+                                denom: token_base_denom.clone(),
+                                exponent: 0,
+                                aliases: vec![],
+                            },
+                            DenomUnit {
+                                denom: token.symbol.clone(),
+                                exponent: token.decimals as u32,
+                                aliases: vec![],
+                            },
+                        ],
+                        base: token_base_denom,
+                        display: token.symbol.clone(),
+                        name: token.name,
+                        symbol: token.symbol,
+                        uri: token.icon.unwrap_or("".to_string()),
+                        uri_hash: "".to_string(),
+                    }),
+                };
+                let update_msg = CosmosMsg::Stargate {
+                    type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
+                    value: set_denom_metadata_msg.encode_to_vec().into(),
+                };
+
+                response = response.add_message(cosmos_msg).add_message(update_msg);
             }
             Directive::UpdateFee(factor) => {
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
@@ -169,7 +215,51 @@ pub mod execute {
                     Ok(state)
                 })?;
             }
-            Directive::UpdateToken(_) => todo!(),
+            Directive::UpdateToken(token) => {
+                if read_state(deps.storage, |s| !s.tokens.contains_key(&token.token_id)) {
+                    return Err(ContractError::TokenNotFound);
+                }
+
+                let sender = env.contract.address.to_string();
+
+                STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                    state.tokens.insert(token.token_id.clone(), token.clone());
+                    Ok(state)
+                })?;
+
+                let token_base_denom =
+                    token_denom(env.contract.address.to_string(), token.token_id);
+                let set_denom_metadata_msg = MsgSetDenomMetadata {
+                    sender: sender.clone(),
+                    metadata: Some(Metadata {
+                        description: token.name.clone(),
+                        denom_units: vec![
+                            DenomUnit {
+                                denom: token_base_denom.clone(),
+                                exponent: 0,
+                                aliases: vec![],
+                            },
+                            DenomUnit {
+                                denom: token.symbol.clone(),
+                                exponent: token.decimals as u32,
+                                aliases: vec![],
+                            },
+                        ],
+                        base: token_base_denom,
+                        display: token.symbol.clone(),
+                        name: token.name,
+                        symbol: token.symbol,
+                        uri: token.icon.unwrap_or("".to_string()),
+                        uri_hash: "".to_string(),
+                    }),
+                };
+                let update_msg = CosmosMsg::Stargate {
+                    type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
+                    value: set_denom_metadata_msg.encode_to_vec().into(),
+                };
+
+                response = response.add_message(update_msg);
+            }
             Directive::ToggleChainState(toggle_state) => {
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
                     if toggle_state.chain_id == state.chain_id {
@@ -186,6 +276,11 @@ pub mod execute {
                 })?;
             }
         };
+
+        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+            state.handled_directives.insert(seq);
+            Ok(state)
+        })?;
         Ok(response
             .add_event(Event::new("DirectiveExecuted").add_attribute("sequence", seq.to_string())))
     }
@@ -199,9 +294,9 @@ pub mod execute {
         receiver: Addr,
         amount: String,
     ) -> Result<Response, ContractError> {
-        // if read_state(deps.storage, |s| s.route != info.sender) {
-        //     return Err(ContractError::Unauthorized);
-        // }
+        if read_state(deps.storage, |s| s.route != info.sender) {
+            return Err(ContractError::Unauthorized);
+        }
 
         if read_state(deps.storage, |s| s.handled_tickets.contains(&ticket_id)) {
             return Err(ContractError::TicketAlreadyHandled);
@@ -217,7 +312,7 @@ pub mod execute {
             Ok(state)
         })?;
 
-        let denom = format!("factory/{}/{}", env.contract.address.to_string(), token.name);
+        let denom = token_denom(env.contract.address.to_string(), token.token_id);
 
         let msg = MsgMint {
             sender: env.contract.address.to_string(),
@@ -257,8 +352,9 @@ pub mod execute {
             None => Err(ContractError::TokenNotFound),
         })?;
 
-        check_fee(&deps, &info,  target_chain.clone())?;
-        let denom = format!("factory/{}/{}", env.contract.address.to_string(), token.name);
+        check_fee(&deps, &info, target_chain.clone())?;
+
+        let denom = token_denom(env.contract.address.to_string(), token.token_id);
 
         let burn_msg = build_burn_msg(
             env.contract.address,
@@ -379,19 +475,20 @@ pub mod execute {
         })?;
 
         let fee = calculate_fee(deps, target_chain)?;
-        if info
+        let funds_info = format!("{:?}",info.funds);
+        let attached_fee = info
             .funds
             .iter()
             .find(|coin| coin.denom == fee_token)
-            .cloned()
-            .map_or(true, |fund| fund.amount < Uint128::from(fee))
-        {
-            return Err(ContractError::InsufficientFee);
+            .map(|c| c.amount.u128()).unwrap_or(0);
+        if attached_fee < fee {
+            return Err(ContractError::InsufficientFee(fee, attached_fee, funds_info));
         }
+        
         Ok(())
     }
 
-    fn calculate_fee(deps: &DepsMut, target_chain: String) -> Result<u128, ContractError> {
+    pub fn calculate_fee(deps: &DepsMut, target_chain: String) -> Result<u128, ContractError> {
         let fee_factor = read_state(deps.storage, |state| {
             state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)
         })?;
@@ -410,7 +507,40 @@ pub mod execute {
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetTokenList {} => to_json_binary(&query::get_token_list(deps)?),
-        QueryMsg::GetFeeInfo {}=> to_json_binary(&query::get_fee_info(deps)?),
+        QueryMsg::GetFeeInfo {} => to_json_binary(&query::get_fee_info(deps)?),
+        QueryMsg::GetTargetChainFee { target_chain } => {
+            let fee_info = query::get_fee_info(deps)?;
+            if fee_info.fee_token.is_none() {
+                return to_json_binary(&GetTargetChainFeeResponse {
+                    target_chain: target_chain,
+                    fee_token: None,
+                    fee_token_factor: None,
+                    fee_amount: None,
+                });
+            }
+            let fee_token = fee_info.fee_token.unwrap();
+            let fee_token_factor = fee_info.fee_token_factor.unwrap();
+            // let fee_amount = calculate_fee(deps, target_chain)?;
+
+            let fee_factor = read_state(deps.storage, |state| {
+                state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)
+            }).unwrap();
+            let chain_factor = read_state(deps.storage, |state| {
+                state
+                    .target_chain_factor
+                    .get(&target_chain)
+                    .cloned()
+                    .ok_or(ContractError::FeeHasNotSet)
+            }).unwrap();
+            let fee_amount = fee_factor * chain_factor;
+
+            to_json_binary(&GetTargetChainFeeResponse {
+                target_chain: target_chain,
+                fee_token: Some(fee_token),
+                fee_token_factor: Some(fee_token_factor),
+                fee_amount: Some(fee_amount),
+            })
+        }
     }
 }
 

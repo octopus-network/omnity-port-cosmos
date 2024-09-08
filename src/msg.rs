@@ -13,9 +13,6 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    TestMsg{
-        text: String,
-    },
     ExecDirective {
         seq: u64,
         directive: Directive,
@@ -32,46 +29,10 @@ pub enum ExecuteMsg {
         amount: String,
         target_chain: String,
     },
-    MintRunes {
-        token_id: String,
-        receiver: Addr,
-        target_chain: String,
-    },
-    BurnToken {
-        token_id: String,
-        amount: String,
-        target_chain: String,
-    },
     UpdateRoute {
         route: Addr,
     }
 }
-
-
-// #[cw_serde]
-// pub enum Directive {
-//     AddChain {
-//         chain: Chain,
-//     },
-//     AddToken {
-//         settlement_chain: String,
-//         token_id: String,
-//         name: String,
-//     },
-//     UpdateChain {
-//         chain: Chain,
-//     },
-//     UpdateToken {
-
-//     },
-//     ToggleChainState {
-//         chain_id: String,
-//         action: ToggleAction
-//     },
-//     UpdateFee {
-//         factor: Factor,
-//     },
-// }
 
 #[cw_serde]
 pub enum ToggleAction {
@@ -86,6 +47,18 @@ pub enum QueryMsg {
     GetTokenList {},
     #[returns(GetFeeResponse)]
     GetFeeInfo {},
+    #[returns(GetTargetChainFeeResponse)]
+    GetTargetChainFee {
+        target_chain: String,
+    },
+}
+
+#[cw_serde]
+pub struct GetTargetChainFeeResponse {
+    pub target_chain: String,
+    pub fee_token: Option<String>,
+    pub fee_token_factor: Option<u128>,
+    pub fee_amount: Option<u128>,
 }
 
 // We define a custom struct for each query response

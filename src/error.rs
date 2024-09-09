@@ -38,6 +38,9 @@ pub enum ContractError {
     #[error("Semver parsing error: {0}")]
     SemVer(String),
 
+    #[error("RedeemAmountLessThanMinAmount, min: {0}, redeem: {1}")]
+    RedeemAmountLessThanMinAmount(String, String)
+
 }
 
 impl From<semver::Error> for ContractError {

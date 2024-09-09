@@ -31,6 +31,11 @@ pub enum ExecuteMsg {
     },
     UpdateRoute {
         route: Addr,
+    },
+    RedeemSetting {
+        token_id: String,
+        target_chain: String,
+        min_amount: String,
     }
 }
 

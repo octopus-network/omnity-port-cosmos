@@ -57,6 +57,7 @@ pub fn instantiate(
         counterparties: BTreeMap::default(),
         chain_id: msg.chain_id,
         chain_state: ChainState::Active,
+        target_chain_redeem_min_amount: BTreeMap::default(),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -91,6 +92,8 @@ pub fn execute(
             target_chain,
         } => execute::redeem_token(deps, env, info, token_id, receiver, amount, target_chain),
         ExecuteMsg::UpdateRoute { route } => execute::update_route(deps, info, route),
+        ExecuteMsg::RedeemSetting { token_id, target_chain, min_amount } => 
+        execute::redeem_setting(deps,  info, token_id, target_chain, min_amount),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
@@ -353,6 +356,7 @@ pub mod execute {
         })?;
 
         check_fee(&deps, &info, target_chain.clone())?;
+        check_min_amount(&deps, &token_id, &target_chain, &amount)?;
 
         let denom = token_denom(env.contract.address.to_string(), token.token_id);
 
@@ -369,62 +373,6 @@ pub mod execute {
                 Attribute::new("receiver", receiver),
                 Attribute::new("amount", amount),
                 Attribute::new("target_chain", target_chain),
-            ]),
-        ))
-    }
-
-    pub fn mint_runes(
-        deps: DepsMut,
-        info: MessageInfo,
-        token_id: String,
-        receiver: Addr,
-        target_chain: String,
-    ) -> Result<Response, ContractError> {
-        // let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
-        //     Some(token) => Ok(token.clone()),
-        //     None => Err(ContractError::TokenNotFound),
-        // })?;
-        if !token_id.starts_with("Bitcoin-runes-") {
-            return Err(ContractError::TokenUnsupportMint);
-        }
-
-        check_fee(&deps, &info, target_chain)?;
-
-        Ok(
-            Response::new().add_event(Event::new("RunesMintRequested").add_attributes(vec![
-                Attribute::new("token_id", token_id),
-                Attribute::new("sender", info.sender),
-                Attribute::new("receiver", receiver),
-            ])),
-        )
-    }
-
-    pub fn burn_token(
-        deps: DepsMut,
-        env: Env,
-        info: MessageInfo,
-        token_id: String,
-        amount: String,
-        target_chain: String,
-    ) -> Result<Response, ContractError> {
-        let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
-            Some(token) => Ok(token.clone()),
-            None => Err(ContractError::TokenNotFound),
-        })?;
-
-        check_fee(&deps, &info, target_chain)?;
-
-        let burn_msg = build_burn_msg(
-            env.contract.address,
-            info.sender.clone(),
-            token.name,
-            amount.clone(),
-        );
-        Ok(Response::new().add_message(burn_msg).add_event(
-            Event::new("TokenBurned").add_attributes(vec![
-                Attribute::new("token_id", token_id),
-                Attribute::new("sender", info.sender),
-                Attribute::new("amount", amount),
             ]),
         ))
     }
@@ -448,6 +396,32 @@ pub mod execute {
         ))
     }
 
+    pub fn redeem_setting(
+        deps: DepsMut,
+        info: MessageInfo,
+        token_id: String, 
+        target_chain: String, 
+        min_amount: String
+    ) -> Result<Response, ContractError>{
+        if read_state(deps.storage, |s| info.sender != s.admin) {
+            return Err(ContractError::Unauthorized);
+        }
+
+        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+            state.target_chain_redeem_min_amount
+                .insert((token_id.clone(), target_chain.clone()), min_amount.clone());
+            Ok(state)
+        })?;
+
+        Ok(Response::new().add_event(
+            Event::new("RedeemSettingUpdated").add_attributes(vec![
+                Attribute::new("token_id", token_id),
+                Attribute::new("target_chain", target_chain),
+                Attribute::new("min_amount", min_amount),
+            ]),
+        ))
+    }
+
     fn build_burn_msg(
         contract_addr: Addr,
         sender: Addr,
@@ -463,6 +437,27 @@ pub mod execute {
             type_url: "/osmosis.tokenfactory.v1beta1.MsgBurn".into(),
             value: Binary::new(msg.encode_to_vec()),
         }
+    }
+
+    fn check_min_amount(
+        deps: &DepsMut,
+        token_id: &String,
+        target_chain: &String,
+        amount: &String,
+    ) -> Result<(), ContractError> {
+        let min_amount = read_state(deps.storage, |state| {
+            state
+                .target_chain_redeem_min_amount
+                .get(&(token_id.clone(), target_chain.clone()))
+                .cloned()
+                .unwrap_or("0".to_string())
+        });
+
+        if amount.parse::<u128>().unwrap() < min_amount.parse::<u128>().unwrap() {
+            return Err(ContractError::RedeemAmountLessThanMinAmount(min_amount, amount.clone()));
+        }
+
+        Ok(())
     }
 
     fn check_fee(

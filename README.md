@@ -1,85 +1,101 @@
-# CosmWasm Starter Pack
+# Omnity Cosmwasm Port
 
-This is a template to build smart contracts in Rust to run inside a
-[Cosmos SDK](https://github.com/cosmos/cosmos-sdk) module on all chains that enable it.
-To understand the framework better, please read the overview in the
-[cosmwasm repo](https://github.com/CosmWasm/cosmwasm/blob/master/README.md),
-and dig into the [cosmwasm docs](https://www.cosmwasm.com).
-This assumes you understand the theory and just want to get coding.
+This is a cosmwasm contract and Omnity cross-chain system docking, mainly responsible for:
 
-## Creating a new repo from template
+1. Receive directives from Omnity system and execute it. There are several types of directives:
 
-Assuming you have a recent version of Rust and Cargo installed
-(via [rustup](https://rustup.rs/)),
-then the following should get you a new repo to start a contract:
-
-Install [cargo-generate](https://github.com/ashleygwilliams/cargo-generate) and cargo-run-script.
-Unless you did that before, run this line now:
-
-```sh
-cargo install cargo-generate --features vendored-openssl
-cargo install cargo-run-script
+```rust
+#[cw_serde]
+pub enum Directive {
+    AddChain(Chain),
+    AddToken(Token),
+    UpdateChain(Chain),
+    UpdateToken(Token),
+    ToggleChainState(ToggleState),
+    UpdateFee(Factor),
+}
 ```
 
-Now, use it to create your new contract.
-Go to the folder in which you want to place it and run:
+2. Receive the Omnity system Mint request and use the Token Factory module mint token.
+3. The Redeem interface allows users to destroy the Token and send a TxHash to the Omnity system to initiate a cross-chain.
 
-**Latest**
+# High Level Design
 
-```sh
-cargo generate --git https://github.com/CosmWasm/cw-template.git --name PROJECT_NAME
+## Omnity Transport
+
+![alt text](images/transport.png)
+
+## Omnity Redeem
+
+![alt text](images/redeem.png)
+
+## Testnet Deploy Cli
+```Shell
+
+# 部署合约
+$ osmosisd tx wasm store target/wasm32-unknown-unknown/release/omnity_port_cosmos.wasm \
+--keyring-backend test \
+--from bob \
+--gas-prices '0.1uosmo' \
+--gas 'auto' \
+--gas-adjustment 1.3 \
+--output json \
+-b sync \
+--chain-id osmo-test-5 \
+--node https://rpc.testnet.osmosis.zone:443 \
+-y
+
+
+# Get code_id from last transaction logs in MintScan
+$ CODE_ID=xxx
+
+# Specify osmosis account id of Omnity Route
+$ INIT='{"route": "osmo1et3ewldnpeemgfrzf96ekraang64tzw8swfhxw"}'
+
+$ osmosisd tx wasm instantiate "$CODE_ID" "$INIT" --keyring-backend test \
+--label "omnity port" \
+--from bob \
+--gas-prices '0.1uosmo' \
+--gas 'auto' \
+--gas-adjustment 1.2 \
+--home ~/.osmosisd \
+--chain-id osmo-test-5 \
+--node https://rpc.testnet.osmosis.zone:443 \
+-b sync \
+--no-admin \
+-y
+
+ADDTOKEN='{"exec_directive":{"seq":1,"directive":{"add_token":{"token_id":"Bitcoin-runes-HOPE.YOU.GET.RICH","name":"HOPE.YOU.GET.RICH","decimals":2, "symbol": "rich", "metadata": {}}}}}'
+$ osmosisd tx wasm execute "$CONTRACT_ADDRESS" "$ADDTOKEN" \
+--keyring-backend test \
+--from bob \
+--gas-prices '1uosmo' \
+--gas 'auto' \
+--gas-adjustment 1.2 \
+--home ~/.osmosisd \
+--node https://rpc.testnet.osmosis.zone:443 \
+--chain-id osmo-test-5 \
+-b sync \
+-y
+
+# Query if add token successfully
+$ osmosisd query tokenfactory denoms-from-creator "$CONTRACT_ADDRESS" --node https://rpc.testnet.osmosis.zone:443
+
+$ MINTTOKEN='{"privilege_mint_token": {"ticket_id": "111999", "token_id":"ckbtc", "receiver": "osmo1et3ewldnpeemgfrzf96ekraang64tzw8swfhxw", "amount": "1000"}}'
+
+$ osmosisd tx wasm execute "$CONTRACT_ADDRESS" "$MINTTOKEN" \
+--keyring-backend test \
+--from bob \
+--gas-prices '1uosmo' \
+--gas 'auto' \
+--gas-adjustment 1.2 \
+--home ~/.osmosisd \
+--node https://rpc.testnet.osmosis.zone:443 \
+--chain-id osmo-test-5 \
+-b sync \
+-y
+
+$ osmosisd query bank balance $RECEIVER factory/osmo10qt8wg0n7z740ssvf3urmvgtjhxpyp74hxqvqt7z226gykuus7eqxj2v4d/HOPE.YOU.GET.RICH
+
+
 ```
-
-For cloning minimal code repo:
-
-```sh
-cargo generate --git https://github.com/CosmWasm/cw-template.git --name PROJECT_NAME -d minimal=true
-```
-
-You will now have a new folder called `PROJECT_NAME` (I hope you changed that to something else)
-containing a simple working contract and build system that you can customize.
-
-## Create a Repo
-
-After generating, you have a initialized local git repo, but no commits, and no remote.
-Go to a server (eg. github) and create a new upstream repo (called `YOUR-GIT-URL` below).
-Then run the following:
-
-```sh
-# this is needed to create a valid Cargo.lock file (see below)
-cargo check
-git branch -M main
-git add .
-git commit -m 'Initial Commit'
-git remote add origin YOUR-GIT-URL
-git push -u origin main
-```
-
-## CI Support
-
-We have template configurations for both [GitHub Actions](.github/workflows/Basic.yml)
-and [Circle CI](.circleci/config.yml) in the generated project, so you can
-get up and running with CI right away.
-
-One note is that the CI runs all `cargo` commands
-with `--locked` to ensure it uses the exact same versions as you have locally. This also means
-you must have an up-to-date `Cargo.lock` file, which is not auto-generated.
-The first time you set up the project (or after adding any dep), you should ensure the
-`Cargo.lock` file is updated, so the CI will test properly. This can be done simply by
-running `cargo check` or `cargo unit-test`.
-
-## Using your project
-
-Once you have your custom repo, you should check out [Developing](./Developing.md) to explain
-more on how to run tests and develop code. Or go through the
-[online tutorial](https://docs.cosmwasm.com/) to get a better feel
-of how to develop.
-
-[Publishing](./Publishing.md) contains useful information on how to publish your contract
-to the world, once you are ready to deploy it on a running blockchain. And
-[Importing](./Importing.md) contains information about pulling in other contracts or crates
-that have been published.
-
-Please replace this README file with information about your specific project. You can keep
-the `Developing.md` and `Publishing.md` files as useful references, but please set some
-proper description in the README.

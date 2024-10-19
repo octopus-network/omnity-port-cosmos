@@ -46,7 +46,7 @@ schemars = "0.8.16"
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.58" }
 semver = "1"
+serde_json ={ version = "^1"}
 
 [dev-dependencies]
 cw-multi-test = "2.0.0"
-serde_json ={ version = "^1"}

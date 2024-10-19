@@ -3,7 +3,12 @@ use std::collections::BTreeMap;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Addr;
 
-use crate::route::{Directive, Token};
+use crate::{route::{Directive, Token}, state::TxAction};
+
+pub mod reply_msg_id {
+    pub const REDEEM_REPLY_ID: u64 = 1;
+    pub const GENERATE_TICKET_REPLY_ID: u64 = 2;
+}
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -28,6 +33,15 @@ pub enum ExecuteMsg {
         receiver: String,
         amount: String,
         target_chain: String,
+    },
+    GenerateTicket {
+        token_id: String,
+        sender: String,
+        receiver: String,
+        amount: String,
+        target_chain: String,
+        action: TxAction,
+        memo: Option<String>,
     },
     UpdateRoute {
         route: Addr,

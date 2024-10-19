@@ -39,7 +39,22 @@ pub enum ContractError {
     SemVer(String),
 
     #[error("RedeemAmountLessThanMinAmount, min: {0}, redeem: {1}")]
-    RedeemAmountLessThanMinAmount(String, String)
+    RedeemAmountLessThanMinAmount(String, String),
+
+    #[error("Custom error message: {0}")]
+    CustomError(String),
+
+    #[error("Error message: {0}")]
+    ReplyError(String),
+
+    #[error("TargetChainNotFound")]
+    TargetChainNotFound,
+
+    #[error("TargetChainActive")]
+    TargetChainDeactive,
+
+    #[error("ChainDeactive")]
+    ChainDeactive,
 
 }
 

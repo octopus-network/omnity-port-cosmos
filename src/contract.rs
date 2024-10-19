@@ -620,10 +620,6 @@ pub mod execute {
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        // QueryMsg::GetEvent { seq } => {
-        //     let event = .load(deps.storage, seq.clone())?;
-        //     to_json_binary(&GetEventResponse { seq, event })
-        // }
         QueryMsg::GetTokenList {} => to_json_binary(&query::get_token_list(deps)?),
         QueryMsg::GetFeeInfo {} => to_json_binary(&query::get_fee_info(deps)?),
         QueryMsg::GetTargetChainFee { target_chain } => {
@@ -638,7 +634,6 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             }
             let fee_token = fee_info.fee_token.unwrap();
             let fee_token_factor = fee_info.fee_token_factor.unwrap();
-            // let fee_amount = calculate_fee(deps, target_chain)?;
 
             let fee_factor = read_state(deps.storage, |state| {
                 state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)

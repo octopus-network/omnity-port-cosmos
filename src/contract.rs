@@ -407,6 +407,7 @@ pub mod execute {
             amount: amount.clone(),
             action: crate::state::TxAction::RedeemIcpChainKeyAssets(IcpChainKeyToken::CKBTC),
             timestamp: env.block.time.nanos(),
+            block_height: env.block.height,
             memo: None,
         };
 
@@ -465,6 +466,7 @@ pub mod execute {
             amount,
             action,
             timestamp: env.block.time.nanos(),
+            block_height: env.block.height,
             memo,
         };
 

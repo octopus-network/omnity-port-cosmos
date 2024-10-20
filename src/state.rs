@@ -48,6 +48,7 @@ pub struct GenerateTicketReq {
     pub amount: String,
     pub action: TxAction,
     pub timestamp: u64,
+    pub block_height: u64,
     pub memo: Option<String>,
 }
 

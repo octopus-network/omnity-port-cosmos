@@ -16,6 +16,7 @@ use semver::Version;
 const CONTRACT_NAME: &str = "crates.io:omnity-port-cosmos";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+
 #[entry_point]
 pub fn migrate(deps: DepsMut, _env: Env, _msg: Empty) -> Result<Response, ContractError> {
     let new_semver_version: Version = CONTRACT_VERSION.parse()?;
@@ -58,6 +59,7 @@ pub fn instantiate(
         chain_id: msg.chain_id,
         chain_state: ChainState::Active,
         target_chain_redeem_min_amount: BTreeMap::default(),
+        generate_ticket_sequence: 0,
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -74,6 +76,12 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
+    let chain_state_active = read_state(deps.storage, |state| {
+        state.chain_state == ChainState::Active
+    });
+    if !chain_state_active {
+        return Err(ContractError::ChainDeactive);
+    }
     let contract = env.contract.address.clone();
     let response = match msg {
         ExecuteMsg::ExecDirective { seq, directive } => {
@@ -84,13 +92,30 @@ pub fn execute(
             token_id,
             receiver,
             amount,
-        } => execute::privilege_mint_token(deps, env, info, ticket_id, token_id, receiver, amount),
+        } => execute::privilege_mint_token(
+            deps, env, info, ticket_id, token_id, receiver, amount
+        ),
         ExecuteMsg::RedeemToken {
             token_id,
             receiver,
             amount,
             target_chain,
-        } => execute::redeem_token(deps, env, info, token_id, receiver, amount, target_chain),
+        } => execute::redeem_token(
+            deps, env, info, token_id, receiver, amount, target_chain
+        ),
+        ExecuteMsg::GenerateTicket { 
+            token_id, 
+            sender, 
+            receiver, 
+            amount, 
+            target_chain, 
+            action, 
+            memo 
+        } => {
+            execute::generate_ticket(
+                deps, env, info, token_id, sender, receiver, amount, target_chain, action, memo
+            )
+        }
         ExecuteMsg::UpdateRoute { route } => execute::update_route(deps, info, route),
         ExecuteMsg::RedeemSetting { token_id, target_chain, min_amount } => 
         execute::redeem_setting(deps,  info, token_id, target_chain, min_amount),
@@ -99,17 +124,14 @@ pub fn execute(
 }
 
 pub mod execute {
-    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event};
+    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event, SubMsg};
     use prost::Message;
 
     use crate::{
         cosmos::{
             bank::v1beta1::{DenomUnit, Metadata},
             base::v1beta1::Coin,
-        },
-        osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint, MsgSetDenomMetadata},
-        route::{Directive, Factor},
-        state::read_state,
+        }, msg::reply_msg_id, osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint, MsgSetDenomMetadata}, route::{Directive, Factor}, state::{read_state, GenerateTicketReq, IcpChainKeyToken}
     };
 
     use super::*;
@@ -128,7 +150,7 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let mut response = Response::new();
 
-        if read_state(deps.storage, |s| s.route != info.sender) {
+        if read_state(deps.storage, |s| s.route != info.sender && s.admin != info.sender) {
             return Err(ContractError::Unauthorized);
         }
 
@@ -214,6 +236,10 @@ pub mod execute {
             }
             Directive::AddChain(chain) | Directive::UpdateChain(chain) => {
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                    if chain.chain_id == state.chain_id {
+                        state.chain_state = chain.chain_state.clone();
+                    }
+
                     state.counterparties.insert(chain.chain_id.clone(), chain);
                     Ok(state)
                 })?;
@@ -297,7 +323,7 @@ pub mod execute {
         receiver: Addr,
         amount: String,
     ) -> Result<Response, ContractError> {
-        if read_state(deps.storage, |s| s.route != info.sender) {
+        if read_state(deps.storage, |s| s.route != info.sender && s.admin != info.sender) {
             return Err(ContractError::Unauthorized);
         }
 
@@ -320,7 +346,6 @@ pub mod execute {
         let msg = MsgMint {
             sender: env.contract.address.to_string(),
             amount: Some(Coin {
-                // todo if token name can always be used as denom
                 denom: denom.clone(),
                 amount: amount.clone(),
             }),
@@ -355,6 +380,7 @@ pub mod execute {
             None => Err(ContractError::TokenNotFound),
         })?;
 
+        check_target_chain(&deps, target_chain.clone())?;
         check_fee(&deps, &info, target_chain.clone())?;
         check_min_amount(&deps, &token_id, &target_chain, &amount)?;
 
@@ -366,14 +392,90 @@ pub mod execute {
             denom,
             amount.clone(),
         );
-        Ok(Response::new().add_message(burn_msg).add_event(
-            Event::new("RedeemRequested").add_attributes(vec![
-                Attribute::new("token_id", token_id),
-                Attribute::new("sender", info.sender),
-                Attribute::new("receiver", receiver),
-                Attribute::new("amount", amount),
-                Attribute::new("target_chain", target_chain),
-            ]),
+
+        let mut state = STATE.load(deps.storage).expect("State not initialized!");
+        let current_seq = state.generate_ticket_sequence;
+        state.generate_ticket_sequence += 1;
+        STATE.save(deps.storage, &state)?;
+        
+        let req = GenerateTicketReq {
+            seq: current_seq,
+            target_chain_id: target_chain,
+            sender: info.sender.into_string(),
+            receiver,
+            token_id,
+            amount: amount.clone(),
+            action: crate::state::TxAction::RedeemIcpChainKeyAssets(IcpChainKeyToken::CKBTC),
+            timestamp: env.block.time.nanos(),
+            memo: None,
+        };
+
+        Ok(Response::new()
+        .add_submessage(
+            SubMsg::reply_on_success(
+                burn_msg, 
+                reply_msg_id::REDEEM_REPLY_ID
+            )
+            .with_payload(serde_json::to_vec(&req)
+            .map_err(|e| ContractError::CustomError(e.to_string()))?)
+        ))
+    }
+
+    pub fn generate_ticket(
+        deps: DepsMut,
+        env: Env,
+        info: MessageInfo,
+        token_id: String,
+        sender: String,
+        receiver: String,
+        amount: String,
+        target_chain: String,
+        action: crate::state::TxAction,
+        memo: Option<String>,
+    )-> Result<Response, ContractError>{
+        let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
+            Some(token) => Ok(token.clone()),
+            None => Err(ContractError::TokenNotFound),
+        })?;
+
+        check_target_chain(&deps, target_chain.clone())?;
+        check_fee(&deps, &info, target_chain.clone())?;
+        check_min_amount(&deps, &token_id, &target_chain, &amount)?;
+
+        let denom = token_denom(env.contract.address.to_string(), token.token_id);
+
+        let burn_msg = build_burn_msg(
+            env.contract.address,
+            info.sender.clone(),
+            denom,
+            amount.clone(),
+        );
+
+        let mut state = STATE.load(deps.storage).expect("State not initialized!");
+        let current_seq = state.generate_ticket_sequence;
+        state.generate_ticket_sequence += 1;
+        STATE.save(deps.storage, &state)?;
+
+        let generate_ticket_req = GenerateTicketReq {
+            seq: current_seq,
+            target_chain_id: target_chain,
+            sender,
+            receiver,
+            token_id,
+            amount,
+            action,
+            timestamp: env.block.time.nanos(),
+            memo,
+        };
+
+        Ok(Response::new()
+        .add_submessage(
+            SubMsg::reply_on_success(
+                burn_msg, 
+                reply_msg_id::GENERATE_TICKET_REPLY_ID
+            )
+            .with_payload(serde_json::to_vec(&generate_ticket_req)
+            .map_err(|e| ContractError::CustomError(e.to_string()))?)
         ))
     }
 
@@ -460,6 +562,23 @@ pub mod execute {
         Ok(())
     }
 
+    fn check_target_chain(
+        deps: &DepsMut,
+        target_chain: String,
+    ) -> Result<(), ContractError> {
+        let counterparties = read_state(deps.storage, |state| state.counterparties.clone());
+
+        if let Some(target_chain) = counterparties.get(&target_chain) {
+            if target_chain.chain_state == ChainState::Active {
+                return Ok(());
+            } else {
+                return Err(ContractError::TargetChainDeactive);
+            }
+        } else {
+            return Err(ContractError::TargetChainNotFound);
+        }
+    }
+
     fn check_fee(
         deps: &DepsMut,
         info: &MessageInfo,
@@ -515,7 +634,6 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             }
             let fee_token = fee_info.fee_token.unwrap();
             let fee_token_factor = fee_info.fee_token_factor.unwrap();
-            // let fee_amount = calculate_fee(deps, target_chain)?;
 
             let fee_factor = read_state(deps.storage, |state| {
                 state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)

@@ -5,6 +5,7 @@ pub mod integration_tests;
 pub mod msg;
 pub mod state;
 pub mod route;
+pub mod reply;
 
 pub use crate::error::ContractError;
 pub use cosmwasm_schema::cw_serde;

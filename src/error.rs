@@ -29,8 +29,8 @@ pub enum ContractError {
     #[error("FeeHasNotSet")]
     FeeHasNotSet,
 
-    #[error("InsufficientFee, required: {0}, attach: {1}, funds: {2}")]
-    InsufficientFee(u128, u128, String),
+    #[error("IncorrectFee, required: {0}, attach: {1}, funds: {2}")]
+    IncorrectFee(u128, u128, String),
 
     #[error("ChainNotFound")]
     ChainNotFound,

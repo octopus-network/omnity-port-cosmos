@@ -381,7 +381,7 @@ pub mod execute {
         })?;
 
         check_target_chain(&deps, target_chain.clone())?;
-        check_fee(&deps, &info, target_chain.clone())?;
+        let (fee_token, fee_amount) = check_fee(&deps, &info, target_chain.clone())?;
         check_min_amount(&deps, &token_id, &target_chain, &amount)?;
 
         let denom = token_denom(env.contract.address.to_string(), token.token_id);
@@ -409,6 +409,8 @@ pub mod execute {
             timestamp: env.block.time.nanos(),
             block_height: env.block.height,
             memo: None,
+            fee_token: fee_token,
+            fee_amount: fee_amount.to_string(),
         };
 
         Ok(Response::new()
@@ -440,7 +442,7 @@ pub mod execute {
         })?;
 
         check_target_chain(&deps, target_chain.clone())?;
-        check_fee(&deps, &info, target_chain.clone())?;
+        let (fee_token, fee_amount) = check_fee(&deps, &info, target_chain.clone())?;
         check_min_amount(&deps, &token_id, &target_chain, &amount)?;
 
         let denom = token_denom(env.contract.address.to_string(), token.token_id);
@@ -468,6 +470,8 @@ pub mod execute {
             timestamp: env.block.time.nanos(),
             block_height: env.block.height,
             memo,
+            fee_token,
+            fee_amount: fee_amount.to_string(),
         };
 
         Ok(Response::new()
@@ -585,7 +589,7 @@ pub mod execute {
         deps: &DepsMut,
         info: &MessageInfo,
         target_chain: String,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(String, u128), ContractError> {
         let fee_token = read_state(deps.storage, |state| {
             state.fee_token.clone().ok_or(ContractError::FeeHasNotSet)
         })?;
@@ -597,11 +601,12 @@ pub mod execute {
             .iter()
             .find(|coin| coin.denom == fee_token)
             .map(|c| c.amount.u128()).unwrap_or(0);
-        if attached_fee < fee {
-            return Err(ContractError::InsufficientFee(fee, attached_fee, funds_info));
+
+        if attached_fee != fee {
+            return Err(ContractError::IncorrectFee(fee, attached_fee, funds_info));
         }
         
-        Ok(())
+        Ok((fee_token, fee))
     }
 
     pub fn calculate_fee(deps: &DepsMut, target_chain: String) -> Result<u128, ContractError> {

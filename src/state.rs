@@ -50,6 +50,8 @@ pub struct GenerateTicketReq {
     pub timestamp: u64,
     pub block_height: u64,
     pub memo: Option<String>,
+    pub fee_token: String,
+    pub fee_amount: String,
 }
 
 #[cw_serde]

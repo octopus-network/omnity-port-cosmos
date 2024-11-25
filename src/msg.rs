@@ -3,11 +3,14 @@ use std::collections::BTreeMap;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Addr;
 
-use crate::{route::{Directive, Token}, state::TxAction};
+use crate::{route::{Directive, Token}, state::{State, TxAction}};
 
 pub mod reply_msg_id {
     pub const REDEEM_REPLY_ID: u64 = 1;
     pub const GENERATE_TICKET_REPLY_ID: u64 = 2;
+    pub const MINT_TOKEN_REPLY_ID: u64 = 3;
+    pub const SWAP_CKBTC_TO_ALLBTC_REPLY_ID: u64 = 4;
+    pub const SWAP_ALLBTC_TO_CKBTC_REPLY_ID: u64 = 5;
 }
 
 #[cw_serde]
@@ -27,9 +30,16 @@ pub enum ExecuteMsg {
         token_id: String,
         receiver: Addr,
         amount: String,
+        // transmuter token into another token then send to user
+        transmuter: Option<String>
     },
     RedeemToken {
         token_id: String,
+        receiver: String,
+        amount: String,
+        target_chain: String,
+    },
+    RedeemAllBTC {
         receiver: String,
         amount: String,
         target_chain: String,
@@ -62,6 +72,8 @@ pub enum ToggleAction {
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
+    #[returns(State)]
+    GetState {},
     #[returns(GetTokenResponse)]
     GetTokenList {},
     #[returns(GetFeeResponse)]

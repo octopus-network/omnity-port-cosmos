@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Binary, Deps, DepsMut, Empty, Env, Event, MessageInfo, Response, StdError, StdResult
+    to_json_binary, Binary, Deps, DepsMut, Empty, Env, Event, MessageInfo, Response, StdError,
+    StdResult,
 };
 use cw2::set_contract_version;
 use semver::Version;
@@ -15,7 +16,6 @@ use semver::Version;
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:omnity-port-cosmos";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
 
 #[entry_point]
 pub fn migrate(deps: DepsMut, _env: Env, _msg: Empty) -> Result<Response, ContractError> {
@@ -30,12 +30,18 @@ pub fn migrate(deps: DepsMut, _env: Env, _msg: Empty) -> Result<Response, Contra
     if old_semver_version >= new_semver_version {
         return Err(StdError::generic_err("Cannot upgrade from a newer version").into());
     }
-    
+
     // set the new version
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    
+
     // do any desired state migrations...
-    
+    STATE.update(deps.storage, |mut state|-> Result<_, ContractError>{
+        state.ckbtc_token_id = "sICP-icrc-ckBTC".to_string();
+        state.allbtc_token_denom="factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC".to_string();
+        state.allbtc_swap_pool_id=1868;
+        Ok(state)
+    })?;
+
     Ok(Response::default())
 }
 
@@ -60,6 +66,9 @@ pub fn instantiate(
         chain_state: ChainState::Active,
         target_chain_redeem_min_amount: BTreeMap::default(),
         generate_ticket_sequence: 0,
+        ckbtc_token_id: Default::default(),
+        allbtc_token_denom: Default::default(),
+        allbtc_swap_pool_id: Default::default(),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -92,46 +101,64 @@ pub fn execute(
             token_id,
             receiver,
             amount,
-        } => execute::privilege_mint_token(
-            deps, env, info, ticket_id, token_id, receiver, amount
-        ),
+            transmuter
+        } => execute::privilege_mint_token(deps, env, info, ticket_id, token_id, receiver, amount, transmuter),
         ExecuteMsg::RedeemToken {
             token_id,
             receiver,
             amount,
             target_chain,
-        } => execute::redeem_token(
-            deps, env, info, token_id, receiver, amount, target_chain
+        } => execute::redeem_token(deps, env, info, token_id, receiver, amount, target_chain),
+        ExecuteMsg::RedeemAllBTC {
+            receiver,
+            amount,
+            target_chain,
+        } => execute::redeem_allbtc(deps, env, info, receiver, amount, target_chain),
+        ExecuteMsg::GenerateTicket {
+            token_id,
+            sender,
+            receiver,
+            amount,
+            target_chain,
+            action,
+            memo,
+        } => execute::generate_ticket(
+            deps,
+            env,
+            info,
+            token_id,
+            sender,
+            receiver,
+            amount,
+            target_chain,
+            action,
+            memo,
         ),
-        ExecuteMsg::GenerateTicket { 
-            token_id, 
-            sender, 
-            receiver, 
-            amount, 
-            target_chain, 
-            action, 
-            memo 
-        } => {
-            execute::generate_ticket(
-                deps, env, info, token_id, sender, receiver, amount, target_chain, action, memo
-            )
-        }
         ExecuteMsg::UpdateRoute { route } => execute::update_route(deps, info, route),
-        ExecuteMsg::RedeemSetting { token_id, target_chain, min_amount } => 
-        execute::redeem_setting(deps,  info, token_id, target_chain, min_amount),
+        ExecuteMsg::RedeemSetting {
+            token_id,
+            target_chain,
+            min_amount,
+        } => execute::redeem_setting(deps, info, token_id, target_chain, min_amount),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
 
 pub mod execute {
     use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event, SubMsg};
+    use osmosis_std::types::osmosis::poolmanager::v1beta1::MsgSwapExactAmountIn;
     use prost::Message;
 
     use crate::{
         cosmos::{
             bank::v1beta1::{DenomUnit, Metadata},
             base::v1beta1::Coin,
-        }, msg::reply_msg_id, osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint, MsgSetDenomMetadata}, route::{Directive, Factor}, state::{read_state, GenerateTicketReq, IcpChainKeyToken}
+        },
+        msg::reply_msg_id,
+        osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint, MsgSetDenomMetadata},
+        route::{Directive, Factor},
+        state::{read_state, GenerateTicketReq, IcpChainKeyToken},
+        types::{MintTokenPayload, RedeemAllBTC},
     };
 
     use super::*;
@@ -150,7 +177,9 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let mut response = Response::new();
 
-        if read_state(deps.storage, |s| s.route != info.sender && s.admin != info.sender) {
+        if read_state(deps.storage, |s| {
+            s.route != info.sender && s.admin != info.sender
+        }) {
             return Err(ContractError::Unauthorized);
         }
 
@@ -165,7 +194,6 @@ pub mod execute {
                 if read_state(deps.storage, |s| s.tokens.contains_key(&token.token_id)) {
                     return Err(ContractError::TokenAleardyExist);
                 }
-              
 
                 let sender = env.contract.address.to_string();
                 // let denom = format!("factory/{}/{}", sender, token.name);
@@ -322,8 +350,11 @@ pub mod execute {
         token_id: String,
         receiver: Addr,
         amount: String,
+        transmuter: Option<String>
     ) -> Result<Response, ContractError> {
-        if read_state(deps.storage, |s| s.route != info.sender && s.admin != info.sender) {
+        if read_state(deps.storage, |s| {
+            s.route != info.sender && s.admin != info.sender
+        }) {
             return Err(ContractError::Unauthorized);
         }
 
@@ -341,7 +372,19 @@ pub mod execute {
             Ok(state)
         })?;
 
+        let (ckbtc_token_id, allbtc_token_denom) = read_state(deps.storage, 
+            |s| (s.ckbtc_token_id.clone(), s.allbtc_token_denom.clone())
+        );
+
         let denom = token_denom(env.contract.address.to_string(), token.token_id);
+        
+        if transmuter.is_some() {
+            if token_id.ne(&ckbtc_token_id) || transmuter.clone().unwrap().ne(&allbtc_token_denom) {
+                return Err(ContractError::CustomError(
+                    "Only Support transmuter ckbtc to allBTC".to_string()
+                ));
+            }
+        }
 
         let msg = MsgMint {
             sender: env.contract.address.to_string(),
@@ -356,13 +399,100 @@ pub mod execute {
             value: Binary::new(msg.encode_to_vec()),
         };
 
-        Ok(Response::new().add_message(cosmos_msg).add_event(
-            Event::new("TokenMinted").add_attributes(vec![
-                Attribute::new("ticket_id", ticket_id),
-                Attribute::new("token_id", token_id),
-                Attribute::new("receiver", receiver),
-                Attribute::new("amount", amount),
-            ]),
+        // let mint_token_msg = ExecuteMsg::PrivilegeMintToken { 
+        //     ticket_id, 
+        //     token_id, 
+        //     receiver: if transmuter.is_some() {env.contract.address} else { receiver }, 
+        //     amount, 
+        //     transmuter 
+        // };
+
+        let mint_token_payload = MintTokenPayload {
+            ticket_id,
+            token_id,
+            receiver: if transmuter.is_some() {env.contract.address} else { receiver }, 
+            amount,
+            transmuter,
+        };
+
+
+        Ok(
+            Response::new().add_submessage(
+                SubMsg::reply_on_success(cosmos_msg, reply_msg_id::MINT_TOKEN_REPLY_ID)
+                .with_payload(serde_json::to_vec(&mint_token_payload)
+                .map_err(|e| ContractError::CustomError(e.to_string()))?)
+            )
+        )
+
+        // Ok(Response::new().add_message(cosmos_msg).add_event(
+        //     Event::new("TokenMinted").add_attributes(vec![
+        //         Attribute::new("ticket_id", ticket_id),
+        //         Attribute::new("token_id", token_id),
+        //         Attribute::new("receiver", receiver),
+        //         Attribute::new("amount", amount),
+        //     ]),
+        // ))
+    }
+
+    pub fn redeem_allbtc(
+        deps: DepsMut,
+        env: Env,
+        info: MessageInfo,
+        receiver: String,
+        amount: String,
+        target_chain: String,
+    ) -> Result<Response, ContractError> {
+        let token_id = read_state(deps.storage, |s| s.ckbtc_token_id.clone());
+        check_target_chain(&deps, target_chain.clone())?;
+        let (fee_token, fee_amount) = check_fee(&deps, &info, target_chain.clone())?;
+        let (allbtc_denom, pool_id) = read_state(deps.storage, |s| {
+            (s.allbtc_token_denom.clone(), s.allbtc_swap_pool_id)
+        });
+        let ckbtc_denom = token_denom(env.contract.address.to_string(), token_id.clone());
+        let allbtc_amount = info
+            .funds
+            .iter()
+            .find(|coin| coin.denom == allbtc_denom)
+            .map(|e| e.amount.u128())
+            .unwrap_or(0);
+        check_min_amount(&deps, &token_id, &target_chain, &allbtc_amount.to_string())?;
+
+        // swap allbtc to ckbtc
+        let swap_msg = MsgSwapExactAmountIn {
+            sender: env.contract.address.to_string(),
+            routes: vec![
+                osmosis_std::types::osmosis::poolmanager::v1beta1::SwapAmountInRoute {
+                    pool_id: pool_id,
+                    token_out_denom: ckbtc_denom,
+                },
+            ],
+            token_in: Some(osmosis_std::types::cosmos::base::v1beta1::Coin {
+                denom: allbtc_denom,
+                amount: allbtc_amount.to_string(),
+            }),
+            token_out_min_amount: allbtc_amount.to_string(),
+        };
+
+        let cosmos_msg = CosmosMsg::Stargate {
+            type_url: "/osmosis.poolmanager.v1beta1.MsgSwapExactAmountIn".into(),
+            value: Binary::new(swap_msg.to_proto_bytes()),
+        };
+
+        let redeem_allbtc = RedeemAllBTC {
+            sender: info.sender.into_string(),
+            receiver,
+            amount,
+            target_chain,
+            fee_token: fee_token,
+            fee_amount: fee_amount.to_string(),
+        };
+
+        Ok(Response::new().add_submessage(
+            SubMsg::reply_on_error(cosmos_msg, reply_msg_id::SWAP_ALLBTC_TO_CKBTC_REPLY_ID)
+                .with_payload(
+                    serde_json::to_vec(&redeem_allbtc)
+                        .map_err(|e| ContractError::CustomError(e.to_string()))?,
+                ),
         ))
     }
 
@@ -397,7 +527,7 @@ pub mod execute {
         let current_seq = state.generate_ticket_sequence;
         state.generate_ticket_sequence += 1;
         STATE.save(deps.storage, &state)?;
-        
+
         let req = GenerateTicketReq {
             seq: current_seq,
             target_chain_id: target_chain,
@@ -413,14 +543,10 @@ pub mod execute {
             fee_amount: fee_amount.to_string(),
         };
 
-        Ok(Response::new()
-        .add_submessage(
-            SubMsg::reply_on_success(
-                burn_msg, 
-                reply_msg_id::REDEEM_REPLY_ID
-            )
-            .with_payload(serde_json::to_vec(&req)
-            .map_err(|e| ContractError::CustomError(e.to_string()))?)
+        Ok(Response::new().add_submessage(
+            SubMsg::reply_on_success(burn_msg, reply_msg_id::REDEEM_REPLY_ID).with_payload(
+                serde_json::to_vec(&req).map_err(|e| ContractError::CustomError(e.to_string()))?,
+            ),
         ))
     }
 
@@ -435,7 +561,7 @@ pub mod execute {
         target_chain: String,
         action: crate::state::TxAction,
         memo: Option<String>,
-    )-> Result<Response, ContractError>{
+    ) -> Result<Response, ContractError> {
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
             Some(token) => Ok(token.clone()),
             None => Err(ContractError::TokenNotFound),
@@ -474,14 +600,12 @@ pub mod execute {
             fee_amount: fee_amount.to_string(),
         };
 
-        Ok(Response::new()
-        .add_submessage(
-            SubMsg::reply_on_success(
-                burn_msg, 
-                reply_msg_id::GENERATE_TICKET_REPLY_ID
-            )
-            .with_payload(serde_json::to_vec(&generate_ticket_req)
-            .map_err(|e| ContractError::CustomError(e.to_string()))?)
+        Ok(Response::new().add_submessage(
+            SubMsg::reply_on_success(burn_msg, reply_msg_id::GENERATE_TICKET_REPLY_ID)
+                .with_payload(
+                    serde_json::to_vec(&generate_ticket_req)
+                        .map_err(|e| ContractError::CustomError(e.to_string()))?,
+                ),
         ))
     }
 
@@ -507,30 +631,31 @@ pub mod execute {
     pub fn redeem_setting(
         deps: DepsMut,
         info: MessageInfo,
-        token_id: String, 
-        target_chain: String, 
-        min_amount: String
-    ) -> Result<Response, ContractError>{
+        token_id: String,
+        target_chain: String,
+        min_amount: String,
+    ) -> Result<Response, ContractError> {
         if read_state(deps.storage, |s| info.sender != s.admin) {
             return Err(ContractError::Unauthorized);
         }
 
         STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-            state.target_chain_redeem_min_amount
+            state
+                .target_chain_redeem_min_amount
                 .insert((token_id.clone(), target_chain.clone()), min_amount.clone());
             Ok(state)
         })?;
 
-        Ok(Response::new().add_event(
-            Event::new("RedeemSettingUpdated").add_attributes(vec![
+        Ok(
+            Response::new().add_event(Event::new("RedeemSettingUpdated").add_attributes(vec![
                 Attribute::new("token_id", token_id),
                 Attribute::new("target_chain", target_chain),
                 Attribute::new("min_amount", min_amount),
-            ]),
-        ))
+            ])),
+        )
     }
 
-    fn build_burn_msg(
+    pub fn build_burn_msg(
         contract_addr: Addr,
         sender: Addr,
         denom: String,
@@ -562,16 +687,16 @@ pub mod execute {
         });
 
         if amount.parse::<u128>().unwrap() < min_amount.parse::<u128>().unwrap() {
-            return Err(ContractError::RedeemAmountLessThanMinAmount(min_amount, amount.clone()));
+            return Err(ContractError::RedeemAmountLessThanMinAmount(
+                min_amount,
+                amount.clone(),
+            ));
         }
 
         Ok(())
     }
 
-    fn check_target_chain(
-        deps: &DepsMut,
-        target_chain: String,
-    ) -> Result<(), ContractError> {
+    fn check_target_chain(deps: &DepsMut, target_chain: String) -> Result<(), ContractError> {
         let counterparties = read_state(deps.storage, |state| state.counterparties.clone());
 
         if let Some(target_chain) = counterparties.get(&target_chain) {
@@ -595,17 +720,18 @@ pub mod execute {
         })?;
 
         let fee = calculate_fee(deps, target_chain)?;
-        let funds_info = format!("{:?}",info.funds);
+        let funds_info = format!("{:?}", info.funds);
         let attached_fee = info
             .funds
             .iter()
             .find(|coin| coin.denom == fee_token)
-            .map(|c| c.amount.u128()).unwrap_or(0);
+            .map(|c| c.amount.u128())
+            .unwrap_or(0);
 
         if attached_fee != fee {
             return Err(ContractError::IncorrectFee(fee, attached_fee, funds_info));
         }
-        
+
         Ok((fee_token, fee))
     }
 
@@ -627,6 +753,7 @@ pub mod execute {
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
+        QueryMsg::GetState {} => to_json_binary(&read_state(deps.storage, |state| state.clone())),
         QueryMsg::GetTokenList {} => to_json_binary(&query::get_token_list(deps)?),
         QueryMsg::GetFeeInfo {} => to_json_binary(&query::get_fee_info(deps)?),
         QueryMsg::GetTargetChainFee { target_chain } => {
@@ -644,14 +771,16 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 
             let fee_factor = read_state(deps.storage, |state| {
                 state.fee_token_factor.ok_or(ContractError::FeeHasNotSet)
-            }).unwrap();
+            })
+            .unwrap();
             let chain_factor = read_state(deps.storage, |state| {
                 state
                     .target_chain_factor
                     .get(&target_chain)
                     .cloned()
                     .ok_or(ContractError::FeeHasNotSet)
-            }).unwrap();
+            })
+            .unwrap();
             let fee_amount = fee_factor * chain_factor;
 
             to_json_binary(&GetTargetChainFeeResponse {

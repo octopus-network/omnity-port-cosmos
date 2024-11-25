@@ -26,6 +26,12 @@ pub struct State {
     pub target_chain_redeem_min_amount: BTreeMap<(TokenId, ChainId), String>,
     #[serde(default)]
     pub generate_ticket_sequence: u64,
+    #[serde(default)]
+    pub ckbtc_token_id: String, 
+    #[serde(default)]
+    pub allbtc_token_denom: String, 
+    #[serde(default)]
+    pub allbtc_swap_pool_id: u64, 
 }
 
 pub const STATE: Item<State> = Item::new("state");

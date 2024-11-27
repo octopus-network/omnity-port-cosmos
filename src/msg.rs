@@ -11,6 +11,7 @@ pub mod reply_msg_id {
     pub const MINT_TOKEN_REPLY_ID: u64 = 3;
     pub const SWAP_CKBTC_TO_ALLBTC_REPLY_ID: u64 = 4;
     pub const SWAP_ALLBTC_TO_CKBTC_REPLY_ID: u64 = 5;
+    pub const SEND_ALLBTC_REPLY_ID: u64 = 6;
 }
 
 #[cw_serde]

@@ -101,8 +101,10 @@ pub fn execute(
             token_id,
             receiver,
             amount,
-            transmuter
-        } => execute::privilege_mint_token(deps, env, info, ticket_id, token_id, receiver, amount, transmuter),
+            transmuter,
+        } => execute::privilege_mint_token(
+            deps, env, info, ticket_id, token_id, receiver, amount, transmuter,
+        ),
         ExecuteMsg::RedeemToken {
             token_id,
             receiver,
@@ -350,7 +352,7 @@ pub mod execute {
         token_id: String,
         receiver: Addr,
         amount: String,
-        transmuter: Option<String>
+        transmuter: Option<String>,
     ) -> Result<Response, ContractError> {
         if read_state(deps.storage, |s| {
             s.route != info.sender && s.admin != info.sender
@@ -372,19 +374,22 @@ pub mod execute {
             Ok(state)
         })?;
 
-        let (ckbtc_token_id, allbtc_token_denom) = read_state(deps.storage, 
-            |s| (s.ckbtc_token_id.clone(), s.allbtc_token_denom.clone())
-        );
+        let (ckbtc_token_id, allbtc_token_denom) = read_state(deps.storage, |s| {
+            (s.ckbtc_token_id.clone(), s.allbtc_token_denom.clone())
+        });
 
         let denom = token_denom(env.contract.address.to_string(), token.token_id);
-        
-        if transmuter.is_some() {
+
+        let ckbtc_mint_receiver = if transmuter.is_some() {
             if token_id.ne(&ckbtc_token_id) || transmuter.clone().unwrap().ne(&allbtc_token_denom) {
                 return Err(ContractError::CustomError(
-                    "Only Support transmuter ckbtc to allBTC".to_string()
+                    "Only Support transmuter ckbtc to allBTC".to_string(),
                 ));
             }
-        }
+            env.contract.address.to_string()
+        } else {
+            receiver.to_string()
+        };
 
         let msg = MsgMint {
             sender: env.contract.address.to_string(),
@@ -392,37 +397,35 @@ pub mod execute {
                 denom: denom.clone(),
                 amount: amount.clone(),
             }),
-            mint_to_address: receiver.to_string(),
+            mint_to_address: ckbtc_mint_receiver,
         };
         let cosmos_msg = CosmosMsg::Stargate {
             type_url: "/osmosis.tokenfactory.v1beta1.MsgMint".into(),
             value: Binary::new(msg.encode_to_vec()),
         };
 
-        // let mint_token_msg = ExecuteMsg::PrivilegeMintToken { 
-        //     ticket_id, 
-        //     token_id, 
-        //     receiver: if transmuter.is_some() {env.contract.address} else { receiver }, 
-        //     amount, 
-        //     transmuter 
+        // let mint_token_msg = ExecuteMsg::PrivilegeMintToken {
+        //     ticket_id,
+        //     token_id,
+        //     receiver: if transmuter.is_some() {env.contract.address} else { receiver },
+        //     amount,
+        //     transmuter
         // };
 
         let mint_token_payload = MintTokenPayload {
             ticket_id,
             token_id,
-            receiver: if transmuter.is_some() {env.contract.address} else { receiver }, 
+            receiver,
             amount,
             transmuter,
         };
 
-
-        Ok(
-            Response::new().add_submessage(
-                SubMsg::reply_on_success(cosmos_msg, reply_msg_id::MINT_TOKEN_REPLY_ID)
-                .with_payload(serde_json::to_vec(&mint_token_payload)
-                .map_err(|e| ContractError::CustomError(e.to_string()))?)
-            )
-        )
+        Ok(Response::new().add_submessage(
+            SubMsg::reply_on_success(cosmos_msg, reply_msg_id::MINT_TOKEN_REPLY_ID).with_payload(
+                serde_json::to_vec(&mint_token_payload)
+                    .map_err(|e| ContractError::CustomError(e.to_string()))?,
+            ),
+        ))
 
         // Ok(Response::new().add_message(cosmos_msg).add_event(
         //     Event::new("TokenMinted").add_attributes(vec![
@@ -483,12 +486,12 @@ pub mod execute {
             receiver,
             amount,
             target_chain,
-            fee_token: fee_token,
+            fee_token,
             fee_amount: fee_amount.to_string(),
         };
 
         Ok(Response::new().add_submessage(
-            SubMsg::reply_on_error(cosmos_msg, reply_msg_id::SWAP_ALLBTC_TO_CKBTC_REPLY_ID)
+            SubMsg::reply_always(cosmos_msg, reply_msg_id::SWAP_ALLBTC_TO_CKBTC_REPLY_ID)
                 .with_payload(
                     serde_json::to_vec(&redeem_allbtc)
                         .map_err(|e| ContractError::CustomError(e.to_string()))?,
@@ -539,7 +542,7 @@ pub mod execute {
             timestamp: env.block.time.nanos(),
             block_height: env.block.height,
             memo: None,
-            fee_token: fee_token,
+            fee_token,
             fee_amount: fee_amount.to_string(),
         };
 

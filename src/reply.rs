@@ -7,7 +7,7 @@ use osmosis_std::types::osmosis::poolmanager::v1beta1::{MsgSwapExactAmountIn, Sw
 
 use crate::{
     contract::execute::{build_burn_msg, token_denom},
-    msg::{reply_msg_id, ExecuteMsg},
+    msg::reply_msg_id,
     state::{read_state, GenerateTicketReq, IcpChainKeyToken, GENERATE_TICKET_REQ, STATE},
     types::{MintTokenPayload, RedeemAllBTC},
     ContractError,
@@ -15,10 +15,11 @@ use crate::{
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn reply(deps: DepsMut, env: Env, msg: Reply) -> Result<Response, ContractError> {
-    if msg.result.is_ok() {
-        reply_success(deps, env, msg)
-    } else {
-        reply_error(deps, env, msg)
+    match msg.result.clone() {
+        cosmwasm_std::SubMsgResult::Ok(_) => reply_success(deps, env, msg),
+        cosmwasm_std::SubMsgResult::Err(err) => reply_error(deps, env, msg).map(|e| {
+            e.add_event(Event::new("ReplyError").add_attributes(vec![Attribute::new("error", err)]))
+        }),
     }
 }
 
@@ -183,18 +184,19 @@ pub fn reply_mint_token(deps: DepsMut, env: Env, msg: Reply) -> Result<Response,
                 Attribute::new("amount", mint_token_payload.amount),
             ])),
         );
-    } else {
-        if mint_token_payload.token_id.ne(&ckbtc_token_id)
-            || mint_token_payload
-                .transmuter
-                .clone()
-                .unwrap()
-                .ne(&allbtc_denom)
-        {
-            return Err(ContractError::CustomError(
-                "Only Support transmuter ckbtc to allBTC".to_string(),
-            ));
-        }
+    }
+
+    // check if mint token is ckbtc
+    if mint_token_payload.token_id.ne(&ckbtc_token_id)
+        || mint_token_payload
+            .transmuter
+            .clone()
+            .unwrap()
+            .ne(&allbtc_denom)
+    {
+        return Err(ContractError::CustomError(
+            "Only Support transmuter ckbtc to allBTC".to_string(),
+        ));
     }
 
     // swap ckbtc to alloy btc
@@ -217,7 +219,7 @@ pub fn reply_mint_token(deps: DepsMut, env: Env, msg: Reply) -> Result<Response,
     };
 
     Ok(Response::new().add_submessage(
-        SubMsg::reply_on_error(cosmos_msg, reply_msg_id::SWAP_CKBTC_TO_ALLBTC_REPLY_ID)
+        SubMsg::reply_always(cosmos_msg, reply_msg_id::SWAP_CKBTC_TO_ALLBTC_REPLY_ID)
             .with_payload(
                 serde_json::to_vec(&mint_token_payload)
                     .map_err(|e| ContractError::CustomError(e.to_string()))?,
@@ -280,7 +282,7 @@ fn reply_swap_allbtc_to_ckbtc(
 
 fn reply_swap_ckbtc_to_allbtc(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     msg: Reply,
 ) -> Result<Response, ContractError> {
     // send allbtc to receiver
@@ -293,7 +295,7 @@ fn reply_swap_ckbtc_to_allbtc(
     let bank_msg = BankMsg::Send {
         to_address: mint_token_payload.receiver.clone().into_string(),
         amount: vec![cosmwasm_std::Coin {
-            denom: token_denom(env.contract.address.to_string(), all_btc_denom),
+            denom: all_btc_denom,
             amount: Uint128::new(mint_token_payload.amount.clone().parse().unwrap()),
         }],
     };

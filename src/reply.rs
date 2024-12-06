@@ -65,6 +65,11 @@ pub fn reply_success(deps: DepsMut, env: Env, msg: Reply) -> Result<Response, Co
                 serde_json::from_slice(msg.payload.clone().as_slice())
                     .map_err(|e| ContractError::CustomError(e.to_string()))?;
             let req_str = serde_json::to_string(&generate_ticket_req).unwrap();
+            GENERATE_TICKET_REQ.save(
+                deps.storage,
+                generate_ticket_req.seq,
+                &generate_ticket_req,
+            )?;
             Ok(
                 Response::new().add_event(Event::new("GenerateTicketRequested").add_attributes(
                     vec![

@@ -35,12 +35,6 @@ pub fn migrate(deps: DepsMut, _env: Env, _msg: Empty) -> Result<Response, Contra
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
     // do any desired state migrations...
-    STATE.update(deps.storage, |mut state|-> Result<_, ContractError>{
-        state.ckbtc_token_id = "sICP-icrc-ckBTC".to_string();
-        state.allbtc_token_denom="factory/osmo1z6r6qdknhgsc0zeracktgpcxf43j6sekq07nw8sxduc9lg0qjjlqfu25e3/alloyed/allBTC".to_string();
-        state.allbtc_swap_pool_id=1868;
-        Ok(state)
-    })?;
 
     Ok(Response::default())
 }
@@ -158,7 +152,7 @@ pub mod execute {
         },
         msg::reply_msg_id,
         osmosis::tokenfactory::v1beta1::{MsgBurn, MsgCreateDenom, MsgMint, MsgSetDenomMetadata},
-        route::{Directive, Factor},
+        route::{Directive, Factor, Token},
         state::{read_state, GenerateTicketReq, IcpChainKeyToken},
         types::{MintTokenPayload, RedeemAllBTC},
     };
@@ -171,7 +165,7 @@ pub mod execute {
     }
 
     pub fn exec_directive(
-        deps: DepsMut,
+        mut deps: DepsMut,
         env: Env,
         info: MessageInfo,
         seq: u64,
@@ -193,59 +187,7 @@ pub mod execute {
 
         match directive {
             Directive::AddToken(token) => {
-                if read_state(deps.storage, |s| s.tokens.contains_key(&token.token_id)) {
-                    return Err(ContractError::TokenAleardyExist);
-                }
-
-                let sender = env.contract.address.to_string();
-                // let denom = format!("factory/{}/{}", sender, token.name);
-
-                STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-                    state.tokens.insert(token.token_id.clone(), token.clone());
-                    Ok(state)
-                })?;
-
-                let msg = MsgCreateDenom {
-                    sender: sender.clone(),
-                    subdenom: token.token_id.clone(),
-                };
-                let cosmos_msg = CosmosMsg::Stargate {
-                    type_url: "/osmosis.tokenfactory.v1beta1.MsgCreateDenom".into(),
-                    value: Binary::new(msg.encode_to_vec()),
-                };
-
-                let token_base_denom =
-                    token_denom(env.contract.address.to_string(), token.token_id);
-                let set_denom_metadata_msg = MsgSetDenomMetadata {
-                    sender: sender.clone(),
-                    metadata: Some(Metadata {
-                        description: token.name.clone(),
-                        denom_units: vec![
-                            DenomUnit {
-                                denom: token_base_denom.clone(),
-                                exponent: 0,
-                                aliases: vec![],
-                            },
-                            DenomUnit {
-                                denom: token.symbol.clone(),
-                                exponent: token.decimals as u32,
-                                aliases: vec![],
-                            },
-                        ],
-                        base: token_base_denom,
-                        display: token.symbol.clone(),
-                        name: token.name,
-                        symbol: token.symbol,
-                        uri: token.icon.unwrap_or("".to_string()),
-                        uri_hash: "".to_string(),
-                    }),
-                };
-                let update_msg = CosmosMsg::Stargate {
-                    type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
-                    value: set_denom_metadata_msg.encode_to_vec().into(),
-                };
-
-                response = response.add_message(cosmos_msg).add_message(update_msg);
+                response = add_token(&mut deps, env, info, token)?;
             }
             Directive::UpdateFee(factor) => {
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
@@ -276,48 +218,48 @@ pub mod execute {
             }
             Directive::UpdateToken(token) => {
                 if read_state(deps.storage, |s| !s.tokens.contains_key(&token.token_id)) {
-                    return Err(ContractError::TokenNotFound);
+                    response = add_token(&mut deps, env, info, token)?;
+                } else {
+                    let sender = env.contract.address.to_string();
+
+                    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                        state.tokens.insert(token.token_id.clone(), token.clone());
+                        Ok(state)
+                    })?;
+
+                    let token_base_denom =
+                        token_denom(env.contract.address.to_string(), token.token_id);
+                    let set_denom_metadata_msg = MsgSetDenomMetadata {
+                        sender: sender.clone(),
+                        metadata: Some(Metadata {
+                            description: token.name.clone(),
+                            denom_units: vec![
+                                DenomUnit {
+                                    denom: token_base_denom.clone(),
+                                    exponent: 0,
+                                    aliases: vec![],
+                                },
+                                DenomUnit {
+                                    denom: token.symbol.clone(),
+                                    exponent: token.decimals as u32,
+                                    aliases: vec![],
+                                },
+                            ],
+                            base: token_base_denom,
+                            display: token.symbol.clone(),
+                            name: token.name,
+                            symbol: token.symbol,
+                            uri: token.icon.unwrap_or("".to_string()),
+                            uri_hash: "".to_string(),
+                        }),
+                    };
+                    let update_msg = CosmosMsg::Stargate {
+                        type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
+                        value: set_denom_metadata_msg.encode_to_vec().into(),
+                    };
+
+                    response = response.add_message(update_msg);
                 }
-
-                let sender = env.contract.address.to_string();
-
-                STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-                    state.tokens.insert(token.token_id.clone(), token.clone());
-                    Ok(state)
-                })?;
-
-                let token_base_denom =
-                    token_denom(env.contract.address.to_string(), token.token_id);
-                let set_denom_metadata_msg = MsgSetDenomMetadata {
-                    sender: sender.clone(),
-                    metadata: Some(Metadata {
-                        description: token.name.clone(),
-                        denom_units: vec![
-                            DenomUnit {
-                                denom: token_base_denom.clone(),
-                                exponent: 0,
-                                aliases: vec![],
-                            },
-                            DenomUnit {
-                                denom: token.symbol.clone(),
-                                exponent: token.decimals as u32,
-                                aliases: vec![],
-                            },
-                        ],
-                        base: token_base_denom,
-                        display: token.symbol.clone(),
-                        name: token.name,
-                        symbol: token.symbol,
-                        uri: token.icon.unwrap_or("".to_string()),
-                        uri_hash: "".to_string(),
-                    }),
-                };
-                let update_msg = CosmosMsg::Stargate {
-                    type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
-                    value: set_denom_metadata_msg.encode_to_vec().into(),
-                };
-
-                response = response.add_message(update_msg);
             }
             Directive::ToggleChainState(toggle_state) => {
                 STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
@@ -342,6 +284,65 @@ pub mod execute {
         })?;
         Ok(response
             .add_event(Event::new("DirectiveExecuted").add_attribute("sequence", seq.to_string())))
+    }
+
+    pub fn add_token(
+        deps: &mut DepsMut,
+        env: Env,
+        _info: MessageInfo,
+        token: Token,
+    ) -> Result<Response, ContractError> {
+        if read_state(deps.storage, |s| s.tokens.contains_key(&token.token_id)) {
+            return Err(ContractError::TokenAleardyExist);
+        }
+        let sender = env.contract.address.to_string();
+        STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+            state.tokens.insert(token.token_id.clone(), token.clone());
+            Ok(state)
+        })?;
+
+        let msg = MsgCreateDenom {
+            sender: sender.clone(),
+            subdenom: token.token_id.clone(),
+        };
+        let cosmos_msg = CosmosMsg::Stargate {
+            type_url: "/osmosis.tokenfactory.v1beta1.MsgCreateDenom".into(),
+            value: Binary::new(msg.encode_to_vec()),
+        };
+
+        let token_base_denom = token_denom(env.contract.address.to_string(), token.token_id);
+        let set_denom_metadata_msg = MsgSetDenomMetadata {
+            sender: sender.clone(),
+            metadata: Some(Metadata {
+                description: token.name.clone(),
+                denom_units: vec![
+                    DenomUnit {
+                        denom: token_base_denom.clone(),
+                        exponent: 0,
+                        aliases: vec![],
+                    },
+                    DenomUnit {
+                        denom: token.symbol.clone(),
+                        exponent: token.decimals as u32,
+                        aliases: vec![],
+                    },
+                ],
+                base: token_base_denom,
+                display: token.symbol.clone(),
+                name: token.name,
+                symbol: token.symbol,
+                uri: token.icon.unwrap_or("".to_string()),
+                uri_hash: "".to_string(),
+            }),
+        };
+        let update_msg = CosmosMsg::Stargate {
+            type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
+            value: set_denom_metadata_msg.encode_to_vec().into(),
+        };
+
+        Ok(Response::new()
+            .add_message(cosmos_msg)
+            .add_message(update_msg))
     }
 
     pub fn privilege_mint_token(

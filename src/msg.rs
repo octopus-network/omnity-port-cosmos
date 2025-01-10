@@ -61,6 +61,13 @@ pub enum ExecuteMsg {
         token_id: String,
         target_chain: String,
         min_amount: String,
+    },
+    UpdateToken {
+        token_id: String,
+        name: String,
+        symbol: String,
+        decimals: u8,
+        icon: Option<String>,
     }
 }
 

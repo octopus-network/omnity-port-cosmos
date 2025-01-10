@@ -136,6 +136,15 @@ pub fn execute(
             target_chain,
             min_amount,
         } => execute::redeem_setting(deps, info, token_id, target_chain, min_amount),
+        ExecuteMsg::UpdateToken { 
+            token_id, 
+            name, 
+            symbol, 
+            decimals, 
+            icon 
+        } => {
+            execute::execute_update_token_msg(deps, env, &info, token_id, name, symbol, decimals, icon)
+        }
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
@@ -657,6 +666,73 @@ pub mod execute {
                 Attribute::new("min_amount", min_amount),
             ])),
         )
+    }
+
+    pub fn execute_update_token_msg(
+        deps: DepsMut,
+        env: Env,
+        _info: &MessageInfo,
+        token_id: String,
+        name: String,
+        symbol: String,
+        decimals: u8,
+        icon: Option<String>,
+    )-> Result<Response, ContractError> {
+        if read_state(deps.storage, |s| !s.tokens.contains_key(&token_id)) {
+            Err(ContractError::TokenNotFound)
+        } else {
+            let sender = env.contract.address.to_string();
+
+            STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                let mut token = state.tokens.get(&token_id).ok_or(ContractError::TokenNotFound)?.clone();
+                token.name = name.clone();
+                token.symbol = symbol.clone();
+                token.decimals = decimals;
+                token.icon = icon.clone();
+                state.tokens.insert(token_id.clone(), token);
+                Ok(state)
+            })?;
+
+            let token = read_state(deps.storage, |s| 
+                s.tokens
+                .get(&token_id)
+                .map(|t| t.clone())
+                .ok_or(ContractError::TokenNotFound))?;
+
+            let token_base_denom =
+                token_denom(env.contract.address.to_string(), token.token_id);
+            let set_denom_metadata_msg = MsgSetDenomMetadata {
+                sender: sender.clone(),
+                metadata: Some(Metadata {
+                    description: token.name.clone(),
+                    denom_units: vec![
+                        DenomUnit {
+                            denom: token_base_denom.clone(),
+                            exponent: 0,
+                            aliases: vec![],
+                        },
+                        DenomUnit {
+                            denom: token.symbol.clone(),
+                            exponent: token.decimals as u32,
+                            aliases: vec![],
+                        },
+                    ],
+                    base: token_base_denom,
+                    display: token.symbol.clone(),
+                    name: token.name,
+                    symbol: token.symbol,
+                    uri: token.icon.unwrap_or("".to_string()),
+                    uri_hash: "".to_string(),
+                }),
+            };
+            let update_msg = CosmosMsg::Stargate {
+                type_url: "/osmosis.tokenfactory.v1beta1.MsgSetDenomMetadata".to_string(),
+                value: set_denom_metadata_msg.encode_to_vec().into(),
+            };
+
+            Ok(Response::new().add_message(update_msg))
+        }
+
     }
 
     pub fn build_burn_msg(

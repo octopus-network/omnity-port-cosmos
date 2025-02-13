@@ -63,6 +63,7 @@ pub fn instantiate(
         ckbtc_token_id: Default::default(),
         allbtc_token_denom: Default::default(),
         allbtc_swap_pool_id: Default::default(),
+        runes_replaced_id_map: Default::default(),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -195,7 +196,15 @@ pub mod execute {
         }
 
         match directive {
-            Directive::AddToken(token) => {
+            Directive::AddToken(mut token) => {
+                if token.token_id.contains("•") {
+                    let replaced_runes_id = token.token_id.replace("•", ".");
+                    STATE.update(deps.storage, |mut state|-> Result<_, ContractError> {
+                        state.runes_replaced_id_map.insert(token.token_id.clone(), replaced_runes_id.clone());
+                        Ok(state)
+                    })?;
+                    token.token_id = replaced_runes_id;
+                }
                 response = add_token(&mut deps, env, info, token)?;
             }
             Directive::UpdateFee(factor) => {
@@ -225,7 +234,15 @@ pub mod execute {
                     Ok(state)
                 })?;
             }
-            Directive::UpdateToken(token) => {
+            Directive::UpdateToken(mut token) => {
+                if token.token_id.contains("•") {
+                    let replaced_runes_id = token.token_id.replace("•", ".");
+                    STATE.update(deps.storage, |mut state|-> Result<_, ContractError> {
+                        state.runes_replaced_id_map.insert(token.token_id.clone(), replaced_runes_id.clone());
+                        Ok(state)
+                    })?;
+                    token.token_id = replaced_runes_id;
+                }
                 if read_state(deps.storage, |s| !s.tokens.contains_key(&token.token_id)) {
                     response = add_token(&mut deps, env, info, token)?;
                 } else {
@@ -546,7 +563,7 @@ pub mod execute {
             target_chain_id: target_chain,
             sender: info.sender.into_string(),
             receiver,
-            token_id,
+            token_id: state.replace_token_id_if_runes(&token_id),
             amount: amount.clone(),
             action: crate::state::TxAction::RedeemIcpChainKeyAssets(IcpChainKeyToken::CKBTC),
             timestamp: env.block.time.nanos(),
@@ -603,7 +620,7 @@ pub mod execute {
             target_chain_id: target_chain,
             sender,
             receiver,
-            token_id,
+            token_id: state.replace_token_id_if_runes(&token_id),
             amount,
             action,
             timestamp: env.block.time.nanos(),

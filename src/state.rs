@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cosmwasm_schema::cw_serde;
 use schemars::JsonSchema;
@@ -32,6 +32,19 @@ pub struct State {
     pub allbtc_token_denom: String, 
     #[serde(default)]
     pub allbtc_swap_pool_id: u64, 
+    // key is replaced id, value is original id
+    #[serde(default)]
+    pub runes_replaced_id_map: HashMap<String, String>
+}
+
+impl State {
+    pub fn replace_token_id_if_runes(&mut self, token_id: &str) -> String {
+        if let Some(runes_token_id) = self.runes_replaced_id_map.get(token_id) {
+            runes_token_id.to_string()
+        } else {
+            token_id.to_string()
+        }
+    }
 }
 
 pub const STATE: Item<State> = Item::new("state");

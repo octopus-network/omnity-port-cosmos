@@ -530,11 +530,14 @@ pub mod execute {
         deps: DepsMut,
         env: Env,
         info: MessageInfo,
-        token_id: String,
+        mut token_id: String,
         receiver: String,
         amount: String,
         target_chain: String,
     ) -> Result<Response, ContractError> {
+
+        token_id = token_id.replace("•", ".");
+
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
             Some(token) => Ok(token.clone()),
             None => Err(ContractError::TokenNotFound),
@@ -584,7 +587,7 @@ pub mod execute {
         deps: DepsMut,
         env: Env,
         info: MessageInfo,
-        token_id: String,
+        mut token_id: String,
         sender: String,
         receiver: String,
         amount: String,
@@ -592,6 +595,7 @@ pub mod execute {
         action: crate::state::TxAction,
         memo: Option<String>,
     ) -> Result<Response, ContractError> {
+        token_id = token_id.replace("•", ".");
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
             Some(token) => Ok(token.clone()),
             None => Err(ContractError::TokenNotFound),

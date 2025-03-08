@@ -292,11 +292,9 @@ pub mod execute {
                     if toggle_state.chain_id == state.chain_id {
                         state.chain_state = toggle_state.action.into();
                     } else {
-                        let chain = state
-                            .counterparties
-                            .get_mut(&toggle_state.chain_id)
-                            .ok_or(ContractError::ChainNotFound)?;
-                        chain.chain_state = toggle_state.action.into();
+                        if let Some(chain) = state.counterparties.get_mut(&toggle_state.chain_id) {
+                            chain.chain_state = toggle_state.action.into();
+                        }
                     }
 
                     Ok(state)

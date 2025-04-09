@@ -1,6 +1,6 @@
 [package]
 name = "omnity-port-cosmos"
-version = "0.1.14"
+version = "0.1.15"
 authors = ["shenao78 <shenao.78@163.com>"]
 edition = "2021"
 

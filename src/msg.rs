@@ -68,6 +68,11 @@ pub enum ExecuteMsg {
         symbol: String,
         decimals: u8,
         icon: Option<String>,
+    },
+    RefundToken {
+        denom: String,
+        receiver: String,
+        amount: String,
     }
 }
 

@@ -137,22 +137,36 @@ pub fn execute(
             target_chain,
             min_amount,
         } => execute::redeem_setting(deps, info, token_id, target_chain, min_amount),
-        ExecuteMsg::UpdateToken { 
-            token_id, 
-            name, 
-            symbol, 
-            decimals, 
-            icon 
-        } => {
-            execute::execute_update_token_msg(deps, env, &info, token_id, name, symbol, decimals, icon)
-        }
+        ExecuteMsg::UpdateToken {
+            token_id,
+            name,
+            symbol,
+            decimals,
+            icon,
+        } => execute::execute_update_token_msg(
+            deps, env, &info, token_id, name, symbol, decimals, icon,
+        ),
+        ExecuteMsg::RefundToken {
+            denom,
+            receiver,
+            amount,
+        } => execute::refund_token(
+            deps, 
+            env, 
+            &info, 
+            denom, 
+            receiver, 
+            amount
+        ),
     }?;
     Ok(response.add_event(Event::new("execute_msg").add_attribute("contract", contract)))
 }
 
 pub mod execute {
-    use cosmwasm_std::{Addr, Attribute, CosmosMsg, Event, SubMsg};
-    use osmosis_std::types::osmosis::poolmanager::v1beta1::MsgSwapExactAmountIn;
+    use cosmwasm_std::{Addr, Attribute, BankMsg, CosmosMsg, Event, SubMsg};
+    use osmosis_std::types::{
+        cosmos::bank::v1beta1::MsgSend, osmosis::poolmanager::v1beta1::MsgSwapExactAmountIn,
+    };
     use prost::Message;
 
     use crate::{
@@ -199,8 +213,10 @@ pub mod execute {
             Directive::AddToken(mut token) => {
                 if token.token_id.contains("•") {
                     let replaced_runes_id = token.token_id.replace("•", ".");
-                    STATE.update(deps.storage, |mut state|-> Result<_, ContractError> {
-                        state.runes_replaced_id_map.insert(token.token_id.clone(), replaced_runes_id.clone());
+                    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                        state
+                            .runes_replaced_id_map
+                            .insert(token.token_id.clone(), replaced_runes_id.clone());
                         Ok(state)
                     })?;
                     token.token_id = replaced_runes_id;
@@ -237,8 +253,10 @@ pub mod execute {
             Directive::UpdateToken(mut token) => {
                 if token.token_id.contains("•") {
                     let replaced_runes_id = token.token_id.replace("•", ".");
-                    STATE.update(deps.storage, |mut state|-> Result<_, ContractError> {
-                        state.runes_replaced_id_map.insert(token.token_id.clone(), replaced_runes_id.clone());
+                    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+                        state
+                            .runes_replaced_id_map
+                            .insert(token.token_id.clone(), replaced_runes_id.clone());
                         Ok(state)
                     })?;
                     token.token_id = replaced_runes_id;
@@ -533,7 +551,6 @@ pub mod execute {
         amount: String,
         target_chain: String,
     ) -> Result<Response, ContractError> {
-
         token_id = token_id.replace("•", ".");
 
         let token = read_state(deps.storage, |s| match s.tokens.get(&token_id) {
@@ -687,6 +704,24 @@ pub mod execute {
         )
     }
 
+    pub fn refund_token(
+        deps: DepsMut,
+        _env: Env,
+        info: &MessageInfo,
+        denom: String,
+        receiver: String,
+        amount: String,
+    ) -> Result<Response, ContractError> {
+        if read_state(deps.storage, |s| {
+            s.route != info.sender && s.admin != info.sender
+        }) {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let msg = build_contract_transfer_msg(denom, amount, receiver)?;
+        Ok(Response::new().add_message(msg))
+    }
+
     pub fn execute_update_token_msg(
         deps: DepsMut,
         env: Env,
@@ -696,14 +731,18 @@ pub mod execute {
         symbol: String,
         decimals: u8,
         icon: Option<String>,
-    )-> Result<Response, ContractError> {
+    ) -> Result<Response, ContractError> {
         if read_state(deps.storage, |s| !s.tokens.contains_key(&token_id)) {
             Err(ContractError::TokenNotFound)
         } else {
             let sender = env.contract.address.to_string();
 
             STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-                let mut token = state.tokens.get(&token_id).ok_or(ContractError::TokenNotFound)?.clone();
+                let mut token = state
+                    .tokens
+                    .get(&token_id)
+                    .ok_or(ContractError::TokenNotFound)?
+                    .clone();
                 token.name = name.clone();
                 token.symbol = symbol.clone();
                 token.decimals = decimals;
@@ -712,14 +751,14 @@ pub mod execute {
                 Ok(state)
             })?;
 
-            let token = read_state(deps.storage, |s| 
+            let token = read_state(deps.storage, |s| {
                 s.tokens
-                .get(&token_id)
-                .map(|t| t.clone())
-                .ok_or(ContractError::TokenNotFound))?;
+                    .get(&token_id)
+                    .map(|t| t.clone())
+                    .ok_or(ContractError::TokenNotFound)
+            })?;
 
-            let token_base_denom =
-                token_denom(env.contract.address.to_string(), token.token_id);
+            let token_base_denom = token_denom(env.contract.address.to_string(), token.token_id);
             let set_denom_metadata_msg = MsgSetDenomMetadata {
                 sender: sender.clone(),
                 metadata: Some(Metadata {
@@ -751,7 +790,6 @@ pub mod execute {
 
             Ok(Response::new().add_message(update_msg))
         }
-
     }
 
     pub fn build_burn_msg(
@@ -769,6 +807,20 @@ pub mod execute {
             type_url: "/osmosis.tokenfactory.v1beta1.MsgBurn".into(),
             value: Binary::new(msg.encode_to_vec()),
         }
+    }
+
+    pub fn build_contract_transfer_msg(
+        denom: String,
+        amount: String,
+        receiver: String,
+    ) -> Result<CosmosMsg, ContractError> {
+        let amount_u128 = amount.parse::<u128>().map_err(|_| {
+            ContractError::CustomError("Failed to parse amount to u128".to_string())
+        })?;
+        Ok(CosmosMsg::Bank(BankMsg::Send {
+            to_address: receiver,
+            amount: vec![cosmwasm_std::Coin::new(amount_u128, denom)],
+        }))
     }
 
     fn check_min_amount(
